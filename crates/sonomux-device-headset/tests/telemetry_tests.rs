@@ -96,3 +96,128 @@ async fn test_headset_monitor_default() {
     assert_eq!(monitor.metadata().id, "headset");
     assert_eq!(monitor.metadata().name, "SteelSeries Arctis Nova 7");
 }
+
+#[tokio::test]
+async fn test_process_sample_debouncing_and_events() {
+    let (tx, mut rx) = tokio::sync::broadcast::channel(16);
+    let mut pending_active = None;
+    let mut pending_count = 0;
+    let mut last_confirmed_active = None;
+    let mut last_battery = None;
+    let threshold = 2;
+    let device_id = "test_headset";
+
+    let active_sample = HeadsetMonitor::parse_telemetry(
+        "BATTERY_AVAILABLE=1\nBATTERY_LEVEL=85\nBATTERY_CHARGING=0\n",
+    );
+    assert!(active_sample.is_active);
+
+    // 1st sample: pending count goes to 1, no status change yet
+    let res1 = HeadsetMonitor::process_sample(
+        &active_sample,
+        &mut pending_active,
+        &mut pending_count,
+        &mut last_confirmed_active,
+        &mut last_battery,
+        threshold,
+        device_id,
+        &tx,
+    );
+    assert_eq!(res1, None);
+    assert_eq!(pending_count, 1);
+
+    // 2nd sample: debounce threshold reached -> becomes Active
+    let res2 = HeadsetMonitor::process_sample(
+        &active_sample,
+        &mut pending_active,
+        &mut pending_count,
+        &mut last_confirmed_active,
+        &mut last_battery,
+        threshold,
+        device_id,
+        &tx,
+    );
+    assert_eq!(res2, Some(DeviceStatus::Active));
+    assert_eq!(pending_count, 2);
+
+    // Check broadcast events
+    let event1 = rx.recv().await.expect("Failed to receive status event");
+    assert_eq!(
+        event1,
+        sonomux_core::traits::DeviceEvent::StatusChanged {
+            id: device_id.to_string(),
+            status: DeviceStatus::Active,
+        }
+    );
+    let event2 = rx.recv().await.expect("Failed to receive battery event");
+    assert_eq!(
+        event2,
+        sonomux_core::traits::DeviceEvent::BatteryChanged {
+            id: device_id.to_string(),
+            percentage: 85,
+        }
+    );
+
+    // Battery drops to 80% while remaining active
+    let battery_drop_sample = HeadsetMonitor::parse_telemetry(
+        "BATTERY_AVAILABLE=1\nBATTERY_LEVEL=80\nBATTERY_CHARGING=0\n",
+    );
+    let res3 = HeadsetMonitor::process_sample(
+        &battery_drop_sample,
+        &mut pending_active,
+        &mut pending_count,
+        &mut last_confirmed_active,
+        &mut last_battery,
+        threshold,
+        device_id,
+        &tx,
+    );
+    assert_eq!(res3, None); // Status did not change, still Active
+    let event3 = rx
+        .recv()
+        .await
+        .expect("Failed to receive updated battery event");
+    assert_eq!(
+        event3,
+        sonomux_core::traits::DeviceEvent::BatteryChanged {
+            id: device_id.to_string(),
+            percentage: 80,
+        }
+    );
+
+    // Power off transition
+    let off_sample = HeadsetMonitor::parse_telemetry("BATTERY_UNAVAILABLE=1\n");
+    // Sample 1: pending resets to false, count 1
+    let res4 = HeadsetMonitor::process_sample(
+        &off_sample,
+        &mut pending_active,
+        &mut pending_count,
+        &mut last_confirmed_active,
+        &mut last_battery,
+        threshold,
+        device_id,
+        &tx,
+    );
+    assert_eq!(res4, None);
+
+    // Sample 2: count 2 -> transitions to Standby
+    let res5 = HeadsetMonitor::process_sample(
+        &off_sample,
+        &mut pending_active,
+        &mut pending_count,
+        &mut last_confirmed_active,
+        &mut last_battery,
+        threshold,
+        device_id,
+        &tx,
+    );
+    assert_eq!(res5, Some(DeviceStatus::Standby));
+    let event4 = rx.recv().await.expect("Failed to receive status event");
+    assert_eq!(
+        event4,
+        sonomux_core::traits::DeviceEvent::StatusChanged {
+            id: device_id.to_string(),
+            status: DeviceStatus::Standby,
+        }
+    );
+}

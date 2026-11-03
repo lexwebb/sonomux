@@ -32,7 +32,7 @@ pub struct DeviceMetadata {
     pub capabilities: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum DeviceEvent {
     StatusChanged {
         id: String,

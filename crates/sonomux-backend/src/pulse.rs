@@ -375,7 +375,7 @@ impl PulseManager {
         None
     }
 
-    async fn get_sink_name_by_index(index: &str) -> Option<String> {
+    pub async fn get_sink_name_by_index(index: &str) -> Option<String> {
         let output = Command::new("pactl")
             .args(["list", "sinks", "short"])
             .output()

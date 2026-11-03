@@ -173,6 +173,65 @@ async fn test_goxlr_default_constructor() {
     assert_eq!(client.metadata().id, "goxlr");
 }
 
+#[tokio::test]
+async fn test_goxlr_server_error_and_empty_mixers() {
+    let temp_dir = std::env::temp_dir();
+    let socket_path = temp_dir.join(format!("mock-goxlr-err-{}.socket", std::process::id()));
+    let _ = std::fs::remove_file(&socket_path);
+
+    let listener = UnixListener::bind(&socket_path).expect("Failed to bind error mock socket");
+
+    let server_task = tokio::spawn(async move {
+        loop {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut len_buf = [0u8; 4];
+                    if stream.read_exact(&mut len_buf).await.is_err() {
+                        return;
+                    }
+                    let req_len = u32::from_be_bytes(len_buf) as usize;
+                    let mut req_buf = vec![0u8; req_len];
+                    if stream.read_exact(&mut req_buf).await.is_err() {
+                        return;
+                    }
+                    let req_str = String::from_utf8_lossy(&req_buf);
+
+                    let resp_payload = if req_str.contains("GetStatus") {
+                        // Empty mixers
+                        json!({
+                            "Status": {
+                                "mixers": {}
+                            }
+                        })
+                    } else {
+                        // Return error for commands
+                        json!({ "Error": "Mock simulated command error" })
+                    };
+
+                    let resp_bytes = serde_json::to_vec(&resp_payload).unwrap();
+                    let resp_len = (resp_bytes.len() as u32).to_be_bytes();
+                    let _ = stream.write_all(&resp_len).await;
+                    let _ = stream.write_all(&resp_bytes).await;
+                    let _ = stream.flush().await;
+                });
+            }
+        }
+    });
+
+    let client = GoXLRClient::new(&socket_path);
+
+    // Empty mixers should return DeviceError::NotFound
+    let serial_res = client.get_serial().await;
+    assert!(serial_res.is_err());
+    match serial_res {
+        Err(sonomux_core::traits::DeviceError::NotFound(_)) => {}
+        other => panic!("Expected NotFound, got {:?}", other),
+    }
+
+    server_task.abort();
+    let _ = std::fs::remove_file(&socket_path);
+}
+
 #[test]
 fn test_channel_as_str_all() {
     let channels = [

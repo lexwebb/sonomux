@@ -98,6 +98,63 @@ impl HeadsetMonitor {
         }
     }
 
+    /// Pure state evaluation and debouncing function.
+    #[allow(clippy::too_many_arguments)]
+    pub fn process_sample(
+        current: &HeadsetTelemetry,
+        pending_active: &mut Option<bool>,
+        pending_count: &mut usize,
+        last_confirmed_active: &mut Option<bool>,
+        last_battery: &mut Option<u8>,
+        threshold: usize,
+        device_id: &str,
+        tx: &broadcast::Sender<DeviceEvent>,
+    ) -> Option<DeviceStatus> {
+        // Debounce state transitions
+        if *pending_active == Some(current.is_active) {
+            *pending_count += 1;
+        } else {
+            *pending_active = Some(current.is_active);
+            *pending_count = 1;
+        }
+
+        if *pending_count >= threshold {
+            let newly_active = current.is_active;
+            let mut status_result = None;
+            if *last_confirmed_active != Some(newly_active) {
+                *last_confirmed_active = Some(newly_active);
+                let new_status = if newly_active {
+                    DeviceStatus::Active
+                } else {
+                    DeviceStatus::Standby
+                };
+                info!("Headset state confirmed: {:?}", new_status);
+
+                let _ = tx.send(DeviceEvent::StatusChanged {
+                    id: device_id.to_string(),
+                    status: new_status,
+                });
+                status_result = Some(new_status);
+            }
+
+            // Update battery telemetry if changed
+            if current.battery_percent != *last_battery && current.battery_percent.is_some() {
+                *last_battery = current.battery_percent;
+                if let Some(pct) = current.battery_percent {
+                    debug!("Headset battery updated: {}%", pct);
+                    let _ = tx.send(DeviceEvent::BatteryChanged {
+                        id: device_id.to_string(),
+                        percentage: pct,
+                    });
+                }
+            }
+
+            return status_result;
+        }
+
+        None
+    }
+
     /// Spawn a background debounced polling loop.
     pub fn start_monitor(&self, interval: Duration) -> tokio::task::JoinHandle<()> {
         let telemetry_arc = Arc::clone(&self.telemetry);
@@ -114,46 +171,18 @@ impl HeadsetMonitor {
             loop {
                 match Self::probe_raw().await {
                     Ok(current) => {
-                        // Debounce state transitions
-                        if pending_active == Some(current.is_active) {
-                            pending_count += 1;
-                        } else {
-                            pending_active = Some(current.is_active);
-                            pending_count = 1;
-                        }
+                        Self::process_sample(
+                            &current,
+                            &mut pending_active,
+                            &mut pending_count,
+                            &mut last_confirmed_active,
+                            &mut last_battery,
+                            threshold,
+                            &device_id,
+                            &tx,
+                        );
 
                         if pending_count >= threshold {
-                            let newly_active = current.is_active;
-                            if last_confirmed_active != Some(newly_active) {
-                                last_confirmed_active = Some(newly_active);
-                                let new_status = if newly_active {
-                                    DeviceStatus::Active
-                                } else {
-                                    DeviceStatus::Standby
-                                };
-                                info!("Headset state confirmed: {:?}", new_status);
-
-                                let _ = tx.send(DeviceEvent::StatusChanged {
-                                    id: device_id.clone(),
-                                    status: new_status,
-                                });
-                            }
-
-                            // Update battery telemetry if changed
-                            if current.battery_percent != last_battery
-                                && current.battery_percent.is_some()
-                            {
-                                last_battery = current.battery_percent;
-                                if let Some(pct) = current.battery_percent {
-                                    debug!("Headset battery updated: {}%", pct);
-                                    let _ = tx.send(DeviceEvent::BatteryChanged {
-                                        id: device_id.clone(),
-                                        percentage: pct,
-                                    });
-                                }
-                            }
-
-                            // Update cached telemetry
                             let mut guard = telemetry_arc.lock().await;
                             *guard = current;
                         }
