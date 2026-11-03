@@ -108,7 +108,7 @@ async fn test_process_sample_debouncing_and_events() {
     let device_id = "test_headset";
 
     let active_sample = HeadsetMonitor::parse_telemetry(
-        "BATTERY_AVAILABLE=1\nBATTERY_LEVEL=85\nBATTERY_CHARGING=0\n",
+        "DEVICE_0_BATTERY_STATUS=\"BATTERY_AVAILABLE\"\nDEVICE_0_BATTERY_LEVEL=85\n",
     );
     assert!(active_sample.is_active);
 
@@ -160,7 +160,7 @@ async fn test_process_sample_debouncing_and_events() {
 
     // Battery drops to 80% while remaining active
     let battery_drop_sample = HeadsetMonitor::parse_telemetry(
-        "BATTERY_AVAILABLE=1\nBATTERY_LEVEL=80\nBATTERY_CHARGING=0\n",
+        "DEVICE_0_BATTERY_STATUS=\"BATTERY_AVAILABLE\"\nDEVICE_0_BATTERY_LEVEL=80\n",
     );
     let res3 = HeadsetMonitor::process_sample(
         &battery_drop_sample,
@@ -186,7 +186,9 @@ async fn test_process_sample_debouncing_and_events() {
     );
 
     // Power off transition
-    let off_sample = HeadsetMonitor::parse_telemetry("BATTERY_UNAVAILABLE=1\n");
+    let off_sample = HeadsetMonitor::parse_telemetry(
+        "DEVICE_0_BATTERY_STATUS=\"BATTERY_UNAVAILABLE\"\nDEVICE_0_BATTERY_LEVEL=-1\n",
+    );
     // Sample 1: pending resets to false, count 1
     let res4 = HeadsetMonitor::process_sample(
         &off_sample,
