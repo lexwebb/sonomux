@@ -21,7 +21,8 @@ async fn test_pulse_manager_live_queries() {
         "dummy_game",
         "dummy_system",
         &["DummyApp"],
-    ).await;
+    )
+    .await;
 }
 
 #[test]
@@ -68,8 +69,14 @@ async fn test_resolve_effective_sink_fast_paths() {
     let empty = PulseManager::resolve_effective_sink("").await;
     assert_eq!(empty, "");
 
-    let alsa = PulseManager::resolve_effective_sink("alsa_output.usb-TC-Helicon_GoXLRMini-00.HiFi__Speaker__sink").await;
-    assert_eq!(alsa, "alsa_output.usb-TC-Helicon_GoXLRMini-00.HiFi__Speaker__sink");
+    let alsa = PulseManager::resolve_effective_sink(
+        "alsa_output.usb-TC-Helicon_GoXLRMini-00.HiFi__Speaker__sink",
+    )
+    .await;
+    assert_eq!(
+        alsa,
+        "alsa_output.usb-TC-Helicon_GoXLRMini-00.HiFi__Speaker__sink"
+    );
 }
 
 #[test]
@@ -167,8 +174,20 @@ fn test_compute_surround_moves_vsm_misplaced() {
     );
 
     assert_eq!(moves.len(), 2);
-    assert_eq!(moves[0], (101, "alsa_output.usb-TC-Helicon_GoXLRMini-00.HiFi__Line1__sink".to_string()));
-    assert_eq!(moves[1], (102, "alsa_output.usb-TC-Helicon_GoXLRMini-00.HiFi__Speaker__sink".to_string()));
+    assert_eq!(
+        moves[0],
+        (
+            101,
+            "alsa_output.usb-TC-Helicon_GoXLRMini-00.HiFi__Line1__sink".to_string()
+        )
+    );
+    assert_eq!(
+        moves[1],
+        (
+            102,
+            "alsa_output.usb-TC-Helicon_GoXLRMini-00.HiFi__Speaker__sink".to_string()
+        )
+    );
 }
 
 #[test]
@@ -186,4 +205,34 @@ fn test_parse_downstream_target_index() {
 
     let not_found = PulseManager::parse_downstream_target_index(stdout, "non_existent_dsp");
     assert_eq!(not_found, None);
+}
+
+#[tokio::test]
+async fn test_pulse_manager_loopback_and_routing_apis() {
+    // Non-existent module health check
+    let healthy = PulseManager::is_loopback_healthy(999_999, "non_existent_source").await;
+    assert!(!healthy);
+
+    // Non-existent loopback finder
+    let found = PulseManager::find_loopback_module("sonomux_test_dummy_source_12345").await;
+    assert_eq!(found, None);
+
+    // Unload non-existent module (should fail gracefully or succeed with error)
+    let unload_res = PulseManager::unload_module(999_999).await;
+    let _ = unload_res;
+
+    // Enforce routing policy execution (with harmless names)
+    let enforce_res = PulseManager::enforce_surround_policies(
+        "effect_output.virtual-surround-manager",
+        "effect_input.virtual-surround-manager",
+        "non_existent_line1",
+        "non_existent_speaker",
+        &["NonExistentApp"],
+    )
+    .await;
+    assert!(enforce_res.is_ok());
+
+    // Resolve effective sink non-existent fallback
+    let resolved = PulseManager::resolve_effective_sink("dummy_virtual_dsp").await;
+    assert_eq!(resolved, "dummy_virtual_dsp");
 }

@@ -14,7 +14,7 @@ pub enum ConfigError {
     Serialize(#[from] toml::ser::Error),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppConfig {
     #[serde(default)]
     pub daemon: DaemonConfig,
@@ -22,16 +22,6 @@ pub struct AppConfig {
     pub devices: DevicesConfig,
     #[serde(default)]
     pub policies: PoliciesConfig,
-}
-
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            daemon: DaemonConfig::default(),
-            devices: DevicesConfig::default(),
-            policies: PoliciesConfig::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,9 +67,12 @@ impl Default for DevicesConfig {
             goxlr_socket: "/tmp/goxlr.socket".to_string(),
             headset_name: "SteelSeries Arctis Nova 7".to_string(),
             headset_sink: "alsa_output.usb-SteelSeries_Arctis_Nova_7-00.analog-stereo".to_string(),
-            goxlr_mix_source: "alsa_input.usb-TC-Helicon_GoXLRMini-00.HiFi__Line5__source".to_string(),
-            goxlr_game_sink: "alsa_output.usb-TC-Helicon_GoXLRMini-00.HiFi__Line1__sink".to_string(),
-            goxlr_system_sink: "alsa_output.usb-TC-Helicon_GoXLRMini-00.HiFi__Speaker__sink".to_string(),
+            goxlr_mix_source: "alsa_input.usb-TC-Helicon_GoXLRMini-00.HiFi__Line5__source"
+                .to_string(),
+            goxlr_game_sink: "alsa_output.usb-TC-Helicon_GoXLRMini-00.HiFi__Line1__sink"
+                .to_string(),
+            goxlr_system_sink: "alsa_output.usb-TC-Helicon_GoXLRMini-00.HiFi__Speaker__sink"
+                .to_string(),
             debounce_count: 2,
         }
     }
@@ -153,7 +146,11 @@ impl AppConfig {
         let full_content = format!("{}{}", header, toml_string);
 
         if let Err(e) = fs::write(&user_path, full_content) {
-            warn!("Could not save default config to {}: {}", user_path.display(), e);
+            warn!(
+                "Could not save default config to {}: {}",
+                user_path.display(),
+                e
+            );
         } else {
             info!("Created default configuration at {}", user_path.display());
         }

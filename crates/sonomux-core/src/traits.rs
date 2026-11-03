@@ -34,10 +34,24 @@ pub struct DeviceMetadata {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DeviceEvent {
-    StatusChanged { id: String, status: DeviceStatus },
-    VolumeChanged { id: String, channel: String, level: f32 },
-    BatteryChanged { id: String, percentage: u8 },
-    Custom { id: String, name: String, payload: String },
+    StatusChanged {
+        id: String,
+        status: DeviceStatus,
+    },
+    VolumeChanged {
+        id: String,
+        channel: String,
+        level: f32,
+    },
+    BatteryChanged {
+        id: String,
+        percentage: u8,
+    },
+    Custom {
+        id: String,
+        name: String,
+        payload: String,
+    },
 }
 
 #[async_trait]
@@ -61,7 +75,12 @@ pub trait HasRoutingMatrix: AudioDevice {
     async fn available_inputs(&self) -> Vec<String>;
     async fn available_outputs(&self) -> Vec<String>;
     async fn is_routed(&self, input: &str, output: &str) -> Result<bool, DeviceError>;
-    async fn set_route(&mut self, input: &str, output: &str, enabled: bool) -> Result<(), DeviceError>;
+    async fn set_route(
+        &mut self,
+        input: &str,
+        output: &str,
+        enabled: bool,
+    ) -> Result<(), DeviceError>;
 }
 
 /// For devices with dedicated hardware DAC / mixer volumes.

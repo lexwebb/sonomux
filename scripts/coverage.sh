@@ -13,6 +13,14 @@ if [[ "${1:-}" == "--strict" || "${CI:-}" == "true" ]]; then
   STRICT_MODE=true
 fi
 
+# Ensure llvm tools are discovered (either from system or rustlib)
+if ! command -v llvm-profdata &>/dev/null; then
+  SYSROOT_BIN="$(rustc --print sysroot 2>/dev/null)/lib/rustlib/$(rustc -vV 2>/dev/null | sed -n 's/host: //p')/bin"
+  if [ -d "$SYSROOT_BIN" ]; then
+    export PATH="${SYSROOT_BIN}:${PATH}"
+  fi
+fi
+
 rm -rf "${COVERAGE_DIR}"
 mkdir -p "${COVERAGE_DIR}"
 

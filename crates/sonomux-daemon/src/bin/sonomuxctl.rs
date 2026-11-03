@@ -37,41 +37,51 @@ async fn main() -> anyhow::Result<()> {
     let cmd = args.first().map(|s| s.as_str()).unwrap_or("status");
 
     match cmd {
-        "status" => {
-            match proxy.get_status().await {
-                Ok((goxlr_up, hs_status, hs_active, battery, spk_vol, loop_up)) => {
-                    println!("🎛️ Sonomux Audio Status:");
-                    println!("  GoXLR Hardware:   {}", if goxlr_up { "● Active (Connected)" } else { "○ Disconnected" });
-                    println!("  Wireless Headset: {} (Active: {})", hs_status, hs_active);
-                    if hs_active && battery > 0 {
-                        println!("  Headset Battery:  {}%", battery);
+        "status" => match proxy.get_status().await {
+            Ok((goxlr_up, hs_status, hs_active, battery, spk_vol, loop_up)) => {
+                println!("🎛️ Sonomux Audio Status:");
+                println!(
+                    "  GoXLR Hardware:   {}",
+                    if goxlr_up {
+                        "● Active (Connected)"
                     } else {
-                        println!("  Headset Battery:  Unavailable (Standby)");
+                        "○ Disconnected"
                     }
-                    println!("  Desk Speakers:    {:.0}%", spk_vol);
-                    println!("  Headset Feed:     {}", if loop_up { "Streaming (Loopback Active)" } else { "Off (Speakers Active)" });
+                );
+                println!("  Wireless Headset: {} (Active: {})", hs_status, hs_active);
+                if hs_active && battery > 0 {
+                    println!("  Headset Battery:  {}%", battery);
+                } else {
+                    println!("  Headset Battery:  Unavailable (Standby)");
                 }
-                Err(e) => {
-                    eprintln!("Failed to query status from daemon: {}", e);
-                    std::process::exit(1);
+                println!("  Desk Speakers:    {:.0}%", spk_vol);
+                println!(
+                    "  Headset Feed:     {}",
+                    if loop_up {
+                        "Streaming (Loopback Active)"
+                    } else {
+                        "Off (Speakers Active)"
+                    }
+                );
+            }
+            Err(e) => {
+                eprintln!("Failed to query status from daemon: {}", e);
+                std::process::exit(1);
+            }
+        },
+        "mute" | "toggle-mute" => match proxy.toggle_speaker_mute().await {
+            Ok(muted) => {
+                if muted {
+                    println!("🔇 Desk speakers muted (0%)");
+                } else {
+                    println!("🔊 Desk speakers unmuted (100%)");
                 }
             }
-        }
-        "mute" | "toggle-mute" => {
-            match proxy.toggle_speaker_mute().await {
-                Ok(muted) => {
-                    if muted {
-                        println!("🔇 Desk speakers muted (0%)");
-                    } else {
-                        println!("🔊 Desk speakers unmuted (100%)");
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Failed to toggle speaker mute: {}", e);
-                    std::process::exit(1);
-                }
+            Err(e) => {
+                eprintln!("Failed to toggle speaker mute: {}", e);
+                std::process::exit(1);
             }
-        }
+        },
         "volume" | "vol" => {
             if let Some(val_str) = args.get(1) {
                 if let Ok(val) = val_str.parse::<f64>() {
@@ -113,7 +123,9 @@ fn print_help() {
     println!("USAGE:");
     println!("  sonomuxctl [COMMAND]\n");
     println!("COMMANDS:");
-    println!("  status         Display current GoXLR, headset, volume, and routing state (default)");
+    println!(
+        "  status         Display current GoXLR, headset, volume, and routing state (default)"
+    );
     println!("  mute           Toggle mute on desk speakers (GoXLR headphone output)");
     println!("  volume <N>     Set desk speaker volume (0 to 100)");
     println!("  enforce        Re-enforce Virtual Surround Manager and stream isolation policies");

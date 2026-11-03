@@ -21,6 +21,12 @@ pub struct HeadsetMonitor {
     debounce_threshold: usize,
 }
 
+impl Default for HeadsetMonitor {
+    fn default() -> Self {
+        Self::new("SteelSeries Arctis Nova 7", 2)
+    }
+}
+
 impl HeadsetMonitor {
     pub fn new(name: &str, debounce_threshold: usize) -> Self {
         let (tx, _) = broadcast::channel(32);
@@ -47,7 +53,9 @@ impl HeadsetMonitor {
             .args(["-o", "env", "-b"])
             .output()
             .await
-            .map_err(|e| DeviceError::Communication(format!("Failed to execute headsetcontrol: {}", e)))?;
+            .map_err(|e| {
+                DeviceError::Communication(format!("Failed to execute headsetcontrol: {}", e))
+            })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         Ok(Self::parse_telemetry(&stdout))
@@ -132,7 +140,9 @@ impl HeadsetMonitor {
                             }
 
                             // Update battery telemetry if changed
-                            if current.battery_percent != last_battery && current.battery_percent.is_some() {
+                            if current.battery_percent != last_battery
+                                && current.battery_percent.is_some()
+                            {
                                 last_battery = current.battery_percent;
                                 if let Some(pct) = current.battery_percent {
                                     debug!("Headset battery updated: {}%", pct);

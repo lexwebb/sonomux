@@ -10,7 +10,8 @@ fn test_device_event_serialization() {
     assert!(json_str.contains("StatusChanged"));
     assert!(json_str.contains("Active"));
 
-    let deserialized: DeviceEvent = serde_json::from_str(&json_str).expect("Failed to deserialize event");
+    let deserialized: DeviceEvent =
+        serde_json::from_str(&json_str).expect("Failed to deserialize event");
     match deserialized {
         DeviceEvent::StatusChanged { id, status } => {
             assert_eq!(id, "headset");

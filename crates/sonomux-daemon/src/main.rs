@@ -23,7 +23,10 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    info!("🎛️ Starting Sonomux Daemon (sonomuxd) v{}...", env!("CARGO_PKG_VERSION"));
+    info!(
+        "🎛️ Starting Sonomux Daemon (sonomuxd) v{}...",
+        env!("CARGO_PKG_VERSION")
+    );
 
     // Load or generate default config (~/.config/sonomux/config.toml)
     let (config, config_path) = AppConfig::load_or_create()?;
@@ -217,7 +220,9 @@ async fn handle_headset_transition(
                     &config.devices.goxlr_mix_source,
                     &config.devices.headset_sink,
                     config.policies.loopback_latency_ms,
-                ).await {
+                )
+                .await
+                {
                     Ok(id) => {
                         *current_loopback_id = Some(id);
                         let mut st = shared_state.lock().await;
@@ -241,7 +246,11 @@ async fn handle_headset_transition(
             }
         }
         DeviceStatus::Standby | DeviceStatus::Disconnected => {
-            s.headset_status = if status == DeviceStatus::Standby { "Standby".into() } else { "Disconnected".into() };
+            s.headset_status = if status == DeviceStatus::Standby {
+                "Standby".into()
+            } else {
+                "Disconnected".into()
+            };
             s.headset_active = false;
             s.loopback_active = false;
             drop(s);
@@ -249,7 +258,9 @@ async fn handle_headset_transition(
             info!("🔊 Headset turned OFF: Disabling feed and restoring desk speakers...");
             if let Some(id) = current_loopback_id.take() {
                 let _ = PulseManager::unload_module(id).await;
-            } else if let Some(id) = PulseManager::find_loopback_module(&config.devices.goxlr_mix_source).await {
+            } else if let Some(id) =
+                PulseManager::find_loopback_module(&config.devices.goxlr_mix_source).await
+            {
                 let _ = PulseManager::unload_module(id).await;
             }
 

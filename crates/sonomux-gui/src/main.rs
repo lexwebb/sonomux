@@ -225,7 +225,10 @@ async fn main() -> anyhow::Result<()> {
     if let Ok(telemetry) = sonomux_device_headset::HeadsetMonitor::probe_raw().await {
         if telemetry.is_active {
             main_window.set_headset_status("Active (Powered On)".into());
-            let bat_str = telemetry.battery_percent.map(|b| format!("{}%", b)).unwrap_or_else(|| "Connected".into());
+            let bat_str = telemetry
+                .battery_percent
+                .map(|b| format!("{}%", b))
+                .unwrap_or_else(|| "Connected".into());
             main_window.set_headset_battery(bat_str.into());
         } else {
             main_window.set_headset_status("Standby (Headset Off)".into());
@@ -239,7 +242,9 @@ async fn main() -> anyhow::Result<()> {
         let client = goxlr_clone.clone();
         tokio::spawn(async move {
             let raw = ((val / 100.0).clamp(0.0, 1.0) * 255.0).round() as u8;
-            let _ = client.set_volume_raw(sonomux_device_goxlr::Channel::Headphones, raw).await;
+            let _ = client
+                .set_volume_raw(sonomux_device_goxlr::Channel::Headphones, raw)
+                .await;
         });
     });
 
@@ -251,7 +256,9 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(async move {
             if let Ok(curr) = client.get_headphones_volume().await {
                 let target = if curr > 0 { 0 } else { 255 };
-                let _ = client.set_volume_raw(sonomux_device_goxlr::Channel::Headphones, target).await;
+                let _ = client
+                    .set_volume_raw(sonomux_device_goxlr::Channel::Headphones, target)
+                    .await;
                 if let Some(ui) = weak.upgrade() {
                     ui.set_speaker_volume(if target > 0 { 100.0 } else { 0.0 });
                 }
@@ -267,7 +274,8 @@ async fn main() -> anyhow::Result<()> {
                 "alsa_output.usb-TC-Helicon_GoXLRMini-00.HiFi__Line1__sink",
                 "alsa_output.usb-TC-Helicon_GoXLRMini-00.HiFi__Speaker__sink",
                 &["Zen"],
-            ).await;
+            )
+            .await;
         });
     });
 

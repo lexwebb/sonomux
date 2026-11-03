@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use tokio::process::Command;
 use tracing::{debug, info, warn};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct PulseManager;
 
 impl PulseManager {
@@ -46,7 +46,7 @@ impl PulseManager {
     pub fn parse_exists(stdout: &str, name: &str) -> bool {
         stdout.lines().any(|l| {
             let parts: Vec<&str> = l.split_whitespace().collect();
-            parts.get(1).map_or(false, |&s| s == name)
+            parts.get(1).is_some_and(|&s| s == name)
         })
     }
 
@@ -129,7 +129,8 @@ impl PulseManager {
         if let Some(list) = val.as_array() {
             for item in list {
                 let owner = item.get("owner_module").and_then(|v| {
-                    v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+                    v.as_u64()
+                        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
                 });
                 let src = item.get("source").and_then(|v| v.as_u64());
 
@@ -154,12 +155,18 @@ impl PulseManager {
                 debug!("Existing loopback module #{} is healthy.", mod_id);
                 return Ok(mod_id);
             } else {
-                warn!("Loopback module #{} is corrupt/detached from {}. Unloading...", mod_id, source);
+                warn!(
+                    "Loopback module #{} is corrupt/detached from {}. Unloading...",
+                    mod_id, source
+                );
                 let _ = Self::unload_module(mod_id).await;
             }
         }
 
-        info!("Loading module-loopback source={} sink={} latency_msec={}...", source, sink, latency_ms);
+        info!(
+            "Loading module-loopback source={} sink={} latency_msec={}...",
+            source, sink, latency_ms
+        );
         let output = Command::new("pactl")
             .args([
                 "load-module",
@@ -174,12 +181,16 @@ impl PulseManager {
 
         if !output.status.success() {
             let err = String::from_utf8_lossy(&output.stderr);
-            return Err(BackendError::Routing(format!("Failed to load loopback: {}", err)));
+            return Err(BackendError::Routing(format!(
+                "Failed to load loopback: {}",
+                err
+            )));
         }
 
         let out_str = String::from_utf8_lossy(&output.stdout);
-        let mod_id = out_str.trim().parse::<u32>()
-            .map_err(|_| BackendError::Routing(format!("Invalid module id returned: {}", out_str)))?;
+        let mod_id = out_str.trim().parse::<u32>().map_err(|_| {
+            BackendError::Routing(format!("Invalid module id returned: {}", out_str))
+        })?;
 
         info!("Loopback module #{} loaded successfully.", mod_id);
         Ok(mod_id)
@@ -192,7 +203,9 @@ impl PulseManager {
             .args(["unload-module", &module_id.to_string()])
             .output()
             .await
-            .map_err(|e| BackendError::Connection(format!("Failed to execute pactl unload-module: {}", e)))?;
+            .map_err(|e| {
+                BackendError::Connection(format!("Failed to execute pactl unload-module: {}", e))
+            })?;
 
         if !output.status.success() {
             let err = String::from_utf8_lossy(&output.stderr);
@@ -214,7 +227,10 @@ impl PulseManager {
         let mut sink_id_to_name = std::collections::HashMap::new();
         if let Some(sinks) = sinks_json.as_array() {
             for s in sinks {
-                if let (Some(idx), Some(name)) = (s.get("index").and_then(|v| v.as_u64()), s.get("name").and_then(|v| v.as_str())) {
+                if let (Some(idx), Some(name)) = (
+                    s.get("index").and_then(|v| v.as_u64()),
+                    s.get("name").and_then(|v| v.as_str()),
+                ) {
                     sink_id_to_name.insert(idx, name.to_string());
                 }
             }
@@ -230,10 +246,19 @@ impl PulseManager {
                     None => continue,
                 };
                 let curr_sink_id = inp.get("sink").and_then(|v| v.as_u64()).unwrap_or(u64::MAX);
-                let curr_sink_name = sink_id_to_name.get(&curr_sink_id).map(|s| s.as_str()).unwrap_or("");
+                let curr_sink_name = sink_id_to_name
+                    .get(&curr_sink_id)
+                    .map(|s| s.as_str())
+                    .unwrap_or("");
                 let props = inp.get("properties");
-                let node_name = props.and_then(|p| p.get("node.name")).and_then(|v| v.as_str()).unwrap_or("");
-                let app_name = props.and_then(|p| p.get("application.name")).and_then(|v| v.as_str()).unwrap_or("");
+                let node_name = props
+                    .and_then(|p| p.get("node.name"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let app_name = props
+                    .and_then(|p| p.get("application.name"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
 
                 // 1. Move VSM output to Game channel if misplaced
                 if node_name == surround_out_node && curr_sink_name != game_sink {
@@ -285,7 +310,10 @@ impl PulseManager {
         );
 
         for (stream_idx, target_sink) in moves {
-            info!("Enforcing policy: moving stream #{} to '{}'", stream_idx, target_sink);
+            info!(
+                "Enforcing policy: moving stream #{} to '{}'",
+                stream_idx, target_sink
+            );
             let _ = Command::new("pactl")
                 .args(["move-sink-input", &stream_idx.to_string(), &target_sink])
                 .status()
@@ -327,7 +355,9 @@ impl PulseManager {
         if let Ok(out) = inputs_out {
             let stdout = String::from_utf8_lossy(&out.stdout);
             if let Some(target_idx) = Self::parse_downstream_target_index(&stdout, sink) {
-                return Self::get_sink_name_by_index(&target_idx).await.unwrap_or(sink.to_string());
+                return Self::get_sink_name_by_index(&target_idx)
+                    .await
+                    .unwrap_or(sink.to_string());
             }
         }
 

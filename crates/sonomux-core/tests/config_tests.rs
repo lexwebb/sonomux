@@ -19,9 +19,15 @@ fn test_toml_serialization_roundtrip() {
     let toml_str = toml::to_string(&original).expect("Serialization failed");
     let parsed: AppConfig = toml::from_str(&toml_str).expect("Deserialization failed");
 
-    assert_eq!(parsed.daemon.check_interval_ms, original.daemon.check_interval_ms);
+    assert_eq!(
+        parsed.daemon.check_interval_ms,
+        original.daemon.check_interval_ms
+    );
     assert_eq!(parsed.devices.headset_name, original.devices.headset_name);
-    assert_eq!(parsed.policies.keep_off_surround, original.policies.keep_off_surround);
+    assert_eq!(
+        parsed.policies.keep_off_surround,
+        original.policies.keep_off_surround
+    );
 }
 
 #[test]
@@ -52,7 +58,10 @@ fn test_custom_toml_parsing() {
     assert!(!cfg.daemon.dbus_enabled);
     assert_eq!(cfg.devices.debounce_count, 5);
     assert_eq!(cfg.devices.goxlr_socket, "/custom/socket.sock");
-    assert_eq!(cfg.policies.keep_off_surround, vec!["Firefox".to_string(), "Discord".to_string()]);
+    assert_eq!(
+        cfg.policies.keep_off_surround,
+        vec!["Firefox".to_string(), "Discord".to_string()]
+    );
     assert_eq!(cfg.policies.loopback_latency_ms, 10);
 }
 
@@ -90,4 +99,33 @@ fn test_load_or_create_generates_file() {
     assert_eq!(cfg2.devices.goxlr_socket, "/tmp/goxlr.socket");
 
     let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_default_config_path_fallback() {
+    let temp_home = env::temp_dir().join(format!("sonomux-home-{}", std::process::id()));
+    unsafe {
+        env::remove_var("XDG_CONFIG_HOME");
+        env::set_var("HOME", &temp_home);
+    }
+    let path = AppConfig::default_config_path();
+    assert_eq!(
+        path,
+        temp_home
+            .join(".config")
+            .join("sonomux")
+            .join("config.toml")
+    );
+}
+
+#[test]
+fn test_config_error_display() {
+    let io_err = ConfigError::Io(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "file not found",
+    ));
+    assert!(format!("{}", io_err).contains("I/O error"));
+
+    let toml_err = ConfigError::Parse(toml::from_str::<AppConfig>("invalid = toml [").unwrap_err());
+    assert!(format!("{}", toml_err).contains("Failed to parse TOML"));
 }

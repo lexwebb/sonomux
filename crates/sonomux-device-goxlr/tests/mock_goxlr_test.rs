@@ -80,40 +80,97 @@ async fn test_goxlr_with_mock_server() {
     let _rx = client.subscribe_events().await;
 
     // 2. Serial discovery
-    let serial = client.get_serial().await.expect("Failed to get serial from mock");
+    let serial = client
+        .get_serial()
+        .await
+        .expect("Failed to get serial from mock");
     assert_eq!(serial, "MOCK_SERIAL_123");
 
     // 3. Headphone volume query
-    let hp_vol = client.get_headphones_volume().await.expect("Failed to read volume");
+    let hp_vol = client
+        .get_headphones_volume()
+        .await
+        .expect("Failed to read volume");
     assert_eq!(hp_vol, 200);
 
     // 4. Volume commands
-    client.set_volume_raw(Channel::Headphones, 0).await.expect("Failed to set volume");
+    client
+        .set_volume_raw(Channel::Headphones, 0)
+        .await
+        .expect("Failed to set volume");
 
     // 5. HasHardwareVolume trait
-    let norm_vol = client.get_channel_volume("Headphones").await.expect("Failed to get channel volume");
+    let norm_vol = client
+        .get_channel_volume("Headphones")
+        .await
+        .expect("Failed to get channel volume");
     assert!((norm_vol - (200.0 / 255.0)).abs() < 0.01);
-    client.set_channel_volume("Headphones", 0.5).await.expect("Failed to set normalized volume");
-    client.set_channel_mute("Headphones", true).await.expect("Failed to mute channel");
-    client.set_channel_mute("Headphones", false).await.expect("Failed to unmute channel");
+    client
+        .set_channel_volume("Headphones", 0.5)
+        .await
+        .expect("Failed to set normalized volume");
+    client
+        .set_channel_mute("Headphones", true)
+        .await
+        .expect("Failed to mute channel");
+    client
+        .set_channel_mute("Headphones", false)
+        .await
+        .expect("Failed to unmute channel");
 
     // 6. HasRoutingMatrix trait
     assert!(!client.available_inputs().await.is_empty());
     assert!(!client.available_outputs().await.is_empty());
-    let routed = client.is_routed("Microphone", "Headphones").await.expect("Failed to check routing");
+    let routed = client
+        .is_routed("Microphone", "Headphones")
+        .await
+        .expect("Failed to check routing");
     assert!(routed);
-    let not_routed = client.is_routed("Microphone", "Sampler").await.expect("Failed to check routing");
+    let not_routed = client
+        .is_routed("Microphone", "Sampler")
+        .await
+        .expect("Failed to check routing");
     assert!(!not_routed);
-    HasRoutingMatrix::set_route(&mut client, "Microphone", "Sampler", true).await.expect("Failed to set trait route");
+    HasRoutingMatrix::set_route(&mut client, "Microphone", "Sampler", true)
+        .await
+        .expect("Failed to set trait route");
 
     // 7. Sampler routing matrix setup
-    client.setup_sampler_routing().await.expect("Failed to setup sampler submix routing");
+    client
+        .setup_sampler_routing()
+        .await
+        .expect("Failed to setup sampler submix routing");
 
     // Clean up
     server_task.abort();
     let _ = std::fs::remove_file(&socket_path);
 
     assert!(received_commands.load(Ordering::SeqCst) >= 8);
+}
+
+#[tokio::test]
+async fn test_goxlr_disconnected_handling() {
+    let non_existent = std::path::PathBuf::from("/tmp/sonomux_nonexistent_test.socket");
+    let mut client = GoXLRClient::new(&non_existent);
+
+    assert_eq!(client.status().await, DeviceStatus::Disconnected);
+    assert!(client.get_serial().await.is_err());
+    assert!(client.get_channel_volume("Headphones").await.is_err());
+    assert!(client.set_channel_volume("Headphones", 0.5).await.is_err());
+    assert!(client.set_channel_mute("Headphones", true).await.is_err());
+    assert!(client.is_routed("Microphone", "Headphones").await.is_err());
+    assert!(
+        HasRoutingMatrix::set_route(&mut client, "Microphone", "Headphones", true)
+            .await
+            .is_err()
+    );
+    assert!(client.setup_sampler_routing().await.is_err());
+}
+
+#[tokio::test]
+async fn test_goxlr_default_constructor() {
+    let client = GoXLRClient::default();
+    assert_eq!(client.metadata().id, "goxlr");
 }
 
 #[test]
