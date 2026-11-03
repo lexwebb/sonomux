@@ -1,6 +1,9 @@
 //! Audio server backend abstraction for PipeWire (Linux) and CoreAudio (macOS).
 
+pub mod pulse;
+
 use async_trait::async_trait;
+pub use pulse::PulseManager;
 use thiserror::Error;
 
 #[derive(Debug, Error)]

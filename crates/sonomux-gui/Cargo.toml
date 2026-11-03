@@ -11,6 +11,9 @@ path = "src/main.rs"
 
 [dependencies]
 sonomux-core = { path = "../sonomux-core" }
+sonomux-backend = { path = "../sonomux-backend" }
+sonomux-device-goxlr = { path = "../sonomux-device-goxlr" }
+sonomux-device-headset = { path = "../sonomux-device-headset" }
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
