@@ -1,0 +1,20 @@
+[package]
+name = "sonomux-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "sonomuxd"
+path = "src/main.rs"
+
+[dependencies]
+sonomux-core = { path = "../sonomux-core" }
+sonomux-backend = { path = "../sonomux-backend" }
+sonomux-device-goxlr = { path = "../sonomux-device-goxlr" }
+sonomux-device-headset = { path = "../sonomux-device-headset" }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true

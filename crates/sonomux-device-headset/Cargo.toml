@@ -1,0 +1,13 @@
+[package]
+name = "sonomux-device-headset"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+sonomux-core = { path = "../sonomux-core" }
+async-trait.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true

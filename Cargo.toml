@@ -1,0 +1,31 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/sonomux-core",
+    "crates/sonomux-backend",
+    "crates/sonomux-device-goxlr",
+    "crates/sonomux-device-headset",
+    "crates/sonomux-daemon",
+    "crates/sonomux-gui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Lex Webb <lex@omarchy.org>"]
+license = "GPL-3.0"
+repository = "https://github.com/lexwebb/sonomux"
+keywords = ["audio", "pipewire", "goxlr", "routing", "headset"]
+categories = ["multimedia::audio", "os::unix-apis"]
+
+[workspace.dependencies]
+tokio = { version = "1.38", features = ["full"] }
+async-trait = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+thiserror = "1.0"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+slint = "1.9"
