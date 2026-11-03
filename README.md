@@ -8,6 +8,9 @@ Designed for modern Linux desktops (PipeWire / WirePlumber) and architected for 
 [![Built with Rust](https://img.shields.io/badge/Language-Rust-orange.svg)](https://www.rust-lang.org/)
 [![GUI: Slint](https://img.shields.io/badge/GUI-Slint-green.svg)](https://slint.dev/)
 
+> [!NOTE]
+> **Project Transparency & AI Collaboration**: Sonomux is developed using human-AI pair programming. Every architectural decision, code change, and hardware integration is reviewed, tested on physical equipment, and maintained by human engineers. We welcome both human and AI-assisted community contributions, provided contributors take 100% personal responsibility for reviewing, understanding, and testing their code. See our [Contributing Guidelines](CONTRIBUTING.md) for full details.
+
 ---
 
 ## The Problems Sonomux Solves
@@ -125,6 +128,15 @@ restore_previous = true
 - [ ] **Phase 4: macOS CoreAudio Support**
   - Implement `audio-backend-coreaudio` aggregate device and routing layer.
   - Additional community device drivers (Elgato Wave XLR, Rodecaster Pro, Focusrite).
+
+---
+
+## Contributing
+
+We welcome contributions from the community! Whether you want to add support for a new audio interface, fix a bug, or improve documentation, please read:
+
+- [**CONTRIBUTING.md**](CONTRIBUTING.md): Code standards, review workflow, and our explicit **AI-assisted coding and human accountability policy**.
+- [**docs/DEVICE_CONTRIBUTING.md**](docs/DEVICE_CONTRIBUTING.md): Architectural guide to implementing device capability traits (`AudioDevice`, `HasPresenceDetection`, `HasRoutingMatrix`, etc.).
 
 ---
 
