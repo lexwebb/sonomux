@@ -35,6 +35,7 @@ impl Default for AppConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct DaemonConfig {
     /// Topology check and stream policy evaluation interval (in milliseconds).
     pub check_interval_ms: u64,
@@ -52,6 +53,7 @@ impl Default for DaemonConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct DevicesConfig {
     /// Path to the GoXLR utility IPC unix domain socket.
     pub goxlr_socket: String,
@@ -84,6 +86,7 @@ impl Default for DevicesConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PoliciesConfig {
     /// Virtual Surround Manager input effect node name.
     pub surround_in_node: String,

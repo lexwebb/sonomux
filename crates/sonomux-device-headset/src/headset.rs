@@ -50,6 +50,11 @@ impl HeadsetMonitor {
             .map_err(|e| DeviceError::Communication(format!("Failed to execute headsetcontrol: {}", e)))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
+        Ok(Self::parse_telemetry(&stdout))
+    }
+
+    /// Parse raw output from `headsetcontrol -o env -b`.
+    pub fn parse_telemetry(stdout: &str) -> HeadsetTelemetry {
         let mut status_str = String::new();
         let mut battery_level: i32 = -1;
 
@@ -78,11 +83,11 @@ impl HeadsetMonitor {
             None
         };
 
-        Ok(HeadsetTelemetry {
+        HeadsetTelemetry {
             is_active,
             battery_percent,
             is_charging,
-        })
+        }
     }
 
     /// Spawn a background debounced polling loop.

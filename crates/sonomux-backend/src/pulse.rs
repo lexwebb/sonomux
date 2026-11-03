@@ -57,6 +57,11 @@ impl PulseManager {
             .ok()?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
+        Self::parse_loopback_module_id(&stdout, source_name)
+    }
+
+    /// Pure parser: Extract module-loopback ID from `pactl list modules short` output.
+    pub fn parse_loopback_module_id(stdout: &str, source_name: &str) -> Option<u32> {
         let src_needle = format!("source={}", source_name);
 
         for line in stdout.lines() {
@@ -106,21 +111,27 @@ impl PulseManager {
 
         if let Ok(out) = outputs_out {
             if let Ok(val) = serde_json::from_slice::<Value>(&out.stdout) {
-                if let Some(list) = val.as_array() {
-                    for item in list {
-                        let owner = item.get("owner_module").and_then(|v| {
-                            v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))
-                        });
-                        let src = item.get("source").and_then(|v| v.as_u64());
-
-                        if owner == Some(module_id as u64) && src == Some(target_idx as u64) {
-                            return true;
-                        }
-                    }
-                }
+                return Self::is_stream_on_source(&val, module_id, target_idx);
             }
         }
 
+        false
+    }
+
+    /// Pure validator: verify that a source-output owned by `module_id` is recording from `target_idx`.
+    pub fn is_stream_on_source(val: &Value, module_id: u32, target_idx: u32) -> bool {
+        if let Some(list) = val.as_array() {
+            for item in list {
+                let owner = item.get("owner_module").and_then(|v| {
+                    v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+                });
+                let src = item.get("source").and_then(|v| v.as_u64());
+
+                if owner == Some(module_id as u64) && src == Some(target_idx as u64) {
+                    return true;
+                }
+            }
+        }
         false
     }
 
