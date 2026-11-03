@@ -18,3 +18,5 @@ Thumbs.db
 *.log
 .env
 local_config.toml
+*.profraw
+*.profdata
