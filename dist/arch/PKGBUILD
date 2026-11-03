@@ -1,0 +1,50 @@
+# Maintainer: Lex Webb <lex@omarchy.org>
+pkgname=sonomux
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Unified audio coordinator, stream routing engine, and peripheral manager for Linux & macOS"
+arch=('x86_64' 'aarch64')
+url="https://github.com/lexwebb/sonomux"
+license=('GPL-3.0')
+depends=('pipewire' 'wireplumber' 'headsetcontrol' 'goxlr-utility')
+makedepends=('cargo' 'git')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release --all-targets
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+
+  # Install Binaries
+  install -Dm755 target/release/sonomux "$pkgdir/usr/bin/sonomux"
+  install -Dm755 target/release/sonomuxd "$pkgdir/usr/bin/sonomuxd"
+  install -Dm755 target/release/sonomuxctl "$pkgdir/usr/bin/sonomuxctl"
+
+  # Install Systemd user service
+  install -Dm644 dist/systemd/sonomuxd.service "$pkgdir/usr/lib/systemd/user/sonomuxd.service"
+
+  # Install Desktop launcher
+  install -Dm644 dist/desktop/org.sonomux.Sonomux.desktop "$pkgdir/usr/share/applications/org.sonomux.Sonomux.desktop"
+
+  # Install D-Bus auto-activation service
+  install -Dm644 dist/dbus/org.sonomux.Daemon.service "$pkgdir/usr/share/dbus-1/services/org.sonomux.Daemon.service"
+
+  # Install License
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+
+  # Install Documentation
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 docs/ARCHITECTURE.md "$pkgdir/usr/share/doc/$pkgname/ARCHITECTURE.md"
+}

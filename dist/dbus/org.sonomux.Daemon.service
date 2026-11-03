@@ -1,0 +1,3 @@
+[D-BUS Service]
+Name=org.sonomux.Daemon
+Exec=/usr/bin/sonomuxd

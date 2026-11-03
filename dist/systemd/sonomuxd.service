@@ -1,0 +1,15 @@
+[Unit]
+Description=Sonomux Audio Coordinator Daemon
+Documentation=https://github.com/lexwebb/sonomux
+After=pipewire.service wireplumber.service sound.target
+Wants=pipewire.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/sonomuxd
+Restart=on-failure
+RestartSec=3s
+Nice=-5
+
+[Install]
+WantedBy=default.target

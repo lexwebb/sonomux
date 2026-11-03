@@ -9,6 +9,10 @@ repository.workspace = true
 name = "sonomuxd"
 path = "src/main.rs"
 
+[[bin]]
+name = "sonomuxctl"
+path = "src/bin/sonomuxctl.rs"
+
 [dependencies]
 sonomux-core = { path = "../sonomux-core" }
 sonomux-backend = { path = "../sonomux-backend" }
@@ -18,3 +22,4 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
+zbus.workspace = true

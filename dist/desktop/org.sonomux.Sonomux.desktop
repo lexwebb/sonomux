@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Sonomux
+GenericName=Audio Coordinator
+Comment=Unified audio coordinator, stream routing engine, and peripheral manager
+Exec=sonomux
+Icon=audio-card
+Terminal=false
+Type=Application
+Categories=AudioVideo;Audio;Mixer;Settings;
+StartupNotify=true
+Keywords=audio;sound;pipewire;goxlr;mixer;routing;headset;
