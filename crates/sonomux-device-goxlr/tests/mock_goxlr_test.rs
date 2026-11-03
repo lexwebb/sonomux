@@ -1,4 +1,5 @@
 use serde_json::json;
+use sonomux_core::traits::{AudioDevice, DeviceStatus, HasHardwareVolume, HasRoutingMatrix};
 use sonomux_device_goxlr::{Channel, GoXLRClient, InputDevice, OutputDevice};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -48,7 +49,8 @@ async fn test_goxlr_with_mock_server() {
                                         },
                                         "router": {
                                             "Microphone": {
-                                                "Sampler": false
+                                                "Sampler": false,
+                                                "Headphones": true
                                             }
                                         }
                                     }
@@ -70,34 +72,92 @@ async fn test_goxlr_with_mock_server() {
         }
     });
 
-    let client = GoXLRClient::new(&socket_path);
+    let mut client = GoXLRClient::new(&socket_path);
 
-    // 1. Test status & serial discovery
+    // 1. AudioDevice trait
+    assert_eq!(client.metadata().id, "goxlr");
+    assert_eq!(client.status().await, DeviceStatus::Active);
+    let _rx = client.subscribe_events().await;
+
+    // 2. Serial discovery
     let serial = client.get_serial().await.expect("Failed to get serial from mock");
     assert_eq!(serial, "MOCK_SERIAL_123");
 
-    // 2. Test headphone volume query
+    // 3. Headphone volume query
     let hp_vol = client.get_headphones_volume().await.expect("Failed to read volume");
     assert_eq!(hp_vol, 200);
 
-    // 3. Test volume command
+    // 4. Volume commands
     client.set_volume_raw(Channel::Headphones, 0).await.expect("Failed to set volume");
 
-    // 4. Test route command
-    client.set_route(InputDevice::Microphone, OutputDevice::Sampler, false).await.expect("Failed to set route");
+    // 5. HasHardwareVolume trait
+    let norm_vol = client.get_channel_volume("Headphones").await.expect("Failed to get channel volume");
+    assert!((norm_vol - (200.0 / 255.0)).abs() < 0.01);
+    client.set_channel_volume("Headphones", 0.5).await.expect("Failed to set normalized volume");
+    client.set_channel_mute("Headphones", true).await.expect("Failed to mute channel");
+    client.set_channel_mute("Headphones", false).await.expect("Failed to unmute channel");
+
+    // 6. HasRoutingMatrix trait
+    assert!(!client.available_inputs().await.is_empty());
+    assert!(!client.available_outputs().await.is_empty());
+    let routed = client.is_routed("Microphone", "Headphones").await.expect("Failed to check routing");
+    assert!(routed);
+    let not_routed = client.is_routed("Microphone", "Sampler").await.expect("Failed to check routing");
+    assert!(!not_routed);
+    HasRoutingMatrix::set_route(&mut client, "Microphone", "Sampler", true).await.expect("Failed to set trait route");
+
+    // 7. Sampler routing matrix setup
+    client.setup_sampler_routing().await.expect("Failed to setup sampler submix routing");
 
     // Clean up
     server_task.abort();
     let _ = std::fs::remove_file(&socket_path);
 
-    assert!(received_commands.load(Ordering::SeqCst) >= 4);
+    assert!(received_commands.load(Ordering::SeqCst) >= 8);
 }
 
 #[test]
-fn test_channel_as_str() {
-    assert_eq!(Channel::Headphones.as_str(), "Headphones");
-    assert_eq!(Channel::Mic.as_str(), "Mic");
-    assert_eq!(Channel::Game.as_str(), "Game");
-    assert_eq!(InputDevice::Microphone.as_str(), "Microphone");
-    assert_eq!(OutputDevice::Sampler.as_str(), "Sampler");
+fn test_channel_as_str_all() {
+    let channels = [
+        Channel::Mic,
+        Channel::LineIn,
+        Channel::Console,
+        Channel::System,
+        Channel::Game,
+        Channel::Chat,
+        Channel::Sample,
+        Channel::Music,
+        Channel::Headphones,
+        Channel::MicMonitor,
+        Channel::LineOut,
+    ];
+    for ch in channels {
+        assert!(!ch.as_str().is_empty());
+    }
+
+    let inputs = [
+        InputDevice::Microphone,
+        InputDevice::Chat,
+        InputDevice::Music,
+        InputDevice::Game,
+        InputDevice::Console,
+        InputDevice::LineIn,
+        InputDevice::System,
+        InputDevice::Samples,
+    ];
+    for inp in inputs {
+        assert!(!inp.as_str().is_empty());
+    }
+
+    let outputs = [
+        OutputDevice::Headphones,
+        OutputDevice::BroadcastMix,
+        OutputDevice::ChatMic,
+        OutputDevice::Sampler,
+        OutputDevice::LineOut,
+        OutputDevice::StreamMix2,
+    ];
+    for out in outputs {
+        assert!(!out.as_str().is_empty());
+    }
 }

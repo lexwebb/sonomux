@@ -1,3 +1,4 @@
+use sonomux_core::traits::{AudioDevice, DeviceStatus, HasPresenceDetection};
 use sonomux_device_headset::HeadsetMonitor;
 
 #[test]
@@ -59,4 +60,32 @@ fn test_parse_telemetry_empty_or_malformed() {
 
     let telemetry_garbage = HeadsetMonitor::parse_telemetry("some random daemon error message");
     assert!(!telemetry_garbage.is_active);
+}
+
+#[tokio::test]
+async fn test_headset_monitor_traits_initial_state() {
+    let monitor = HeadsetMonitor::new("SteelSeries Arctis Nova 7", 2);
+
+    assert_eq!(monitor.metadata().id, "headset");
+    assert_eq!(monitor.metadata().name, "SteelSeries Arctis Nova 7");
+    assert_eq!(monitor.status().await, DeviceStatus::Standby);
+    assert!(!monitor.is_physically_active().await);
+    assert_eq!(monitor.battery_level().await, None);
+    assert_eq!(monitor.is_charging().await, None);
+
+    let _rx = monitor.subscribe_events().await;
+}
+
+#[tokio::test]
+async fn test_headset_monitor_background_loop() {
+    let monitor = HeadsetMonitor::new("SteelSeries Arctis Nova 7", 1);
+    let _rx = monitor.subscribe_events().await;
+    let handle = monitor.start_monitor(std::time::Duration::from_millis(50));
+    
+    // Exercise loop, probe, debounce, and state update
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    handle.abort();
+
+    let status = monitor.status().await;
+    assert!(status == DeviceStatus::Standby || status == DeviceStatus::Active);
 }

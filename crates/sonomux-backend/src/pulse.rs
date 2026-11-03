@@ -21,10 +21,7 @@ impl PulseManager {
 
         if let Ok(out) = output {
             let stdout = String::from_utf8_lossy(&out.stdout);
-            stdout.lines().any(|l| {
-                let parts: Vec<&str> = l.split_whitespace().collect();
-                parts.get(1).map_or(false, |&s| s == name)
-            })
+            Self::parse_exists(&stdout, name)
         } else {
             false
         }
@@ -39,13 +36,18 @@ impl PulseManager {
 
         if let Ok(out) = output {
             let stdout = String::from_utf8_lossy(&out.stdout);
-            stdout.lines().any(|l| {
-                let parts: Vec<&str> = l.split_whitespace().collect();
-                parts.get(1).map_or(false, |&s| s == name)
-            })
+            Self::parse_exists(&stdout, name)
         } else {
             false
         }
+    }
+
+    /// Pure parser: check if name appears as second column in short output.
+    pub fn parse_exists(stdout: &str, name: &str) -> bool {
+        stdout.lines().any(|l| {
+            let parts: Vec<&str> = l.split_whitespace().collect();
+            parts.get(1).map_or(false, |&s| s == name)
+        })
     }
 
     /// Find the PulseAudio module ID of an active module-loopback matching the given source.
@@ -75,6 +77,18 @@ impl PulseManager {
         None
     }
 
+    /// Pure parser: Find source index from `pactl list sources short` output.
+    pub fn parse_source_index(stdout: &str, expected_source: &str) -> Option<u32> {
+        stdout.lines().find_map(|l| {
+            let parts: Vec<&str> = l.split_whitespace().collect();
+            if parts.len() >= 2 && parts[1] == expected_source {
+                parts[0].parse::<u32>().ok()
+            } else {
+                None
+            }
+        })
+    }
+
     /// Verify whether the loopback's capture stream is *actually* attached to the target source.
     /// This fixes the silent fallback bug where reconnecting GoXLR causes loopback to capture default mic.
     pub async fn is_loopback_healthy(module_id: u32, expected_source: &str) -> bool {
@@ -84,23 +98,15 @@ impl PulseManager {
             .output()
             .await;
 
-        let expected_index = if let Ok(out) = sources_out {
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            stdout.lines().find_map(|l| {
-                let parts: Vec<&str> = l.split_whitespace().collect();
-                if parts.len() >= 2 && parts[1] == expected_source {
-                    parts[0].parse::<u32>().ok()
-                } else {
-                    None
+        let target_idx = match sources_out {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                match Self::parse_source_index(&stdout, expected_source) {
+                    Some(idx) => idx,
+                    None => return false,
                 }
-            })
-        } else {
-            None
-        };
-
-        let target_idx = match expected_index {
-            Some(idx) => idx,
-            None => return false,
+            }
+            Err(_) => return false,
         };
 
         // 2. Query source-outputs in JSON
@@ -195,6 +201,54 @@ impl PulseManager {
         Ok(())
     }
 
+    /// Pure logic: Calculate which streams need to be moved based on surround policies.
+    pub fn compute_surround_moves(
+        inputs_json: &Value,
+        sinks_json: &Value,
+        surround_out_node: &str,
+        surround_in_node: &str,
+        game_sink: &str,
+        system_sink: &str,
+        keep_off_apps: &[&str],
+    ) -> Vec<(u64, String)> {
+        let mut sink_id_to_name = std::collections::HashMap::new();
+        if let Some(sinks) = sinks_json.as_array() {
+            for s in sinks {
+                if let (Some(idx), Some(name)) = (s.get("index").and_then(|v| v.as_u64()), s.get("name").and_then(|v| v.as_str())) {
+                    sink_id_to_name.insert(idx, name.to_string());
+                }
+            }
+        }
+
+        let keep_off_set: HashSet<&str> = keep_off_apps.iter().copied().collect();
+        let mut moves = Vec::new();
+
+        if let Some(inputs) = inputs_json.as_array() {
+            for inp in inputs {
+                let stream_idx = match inp.get("index").and_then(|v| v.as_u64()) {
+                    Some(i) => i,
+                    None => continue,
+                };
+                let curr_sink_id = inp.get("sink").and_then(|v| v.as_u64()).unwrap_or(u64::MAX);
+                let curr_sink_name = sink_id_to_name.get(&curr_sink_id).map(|s| s.as_str()).unwrap_or("");
+                let props = inp.get("properties");
+                let node_name = props.and_then(|p| p.get("node.name")).and_then(|v| v.as_str()).unwrap_or("");
+                let app_name = props.and_then(|p| p.get("application.name")).and_then(|v| v.as_str()).unwrap_or("");
+
+                // 1. Move VSM output to Game channel if misplaced
+                if node_name == surround_out_node && curr_sink_name != game_sink {
+                    moves.push((stream_idx, game_sink.to_string()));
+                }
+                // 2. Move isolated apps (e.g. Zen) back to System if VSM grabbed them
+                else if keep_off_set.contains(app_name) && curr_sink_name == surround_in_node {
+                    moves.push((stream_idx, system_sink.to_string()));
+                }
+            }
+        }
+
+        moves
+    }
+
     /// Enforce Virtual Surround Manager routing policies:
     /// - `surround_out` is pinned to `game_sink`
     /// - Apps in `keep_off` are moved back to `system_sink` if surround grabbed them
@@ -220,49 +274,43 @@ impl PulseManager {
         let sinks_json: Value = serde_json::from_slice(&sinks_out.stdout).unwrap_or(Value::Null);
         let inputs_json: Value = serde_json::from_slice(&inputs_out.stdout).unwrap_or(Value::Null);
 
-        let mut sink_id_to_name = std::collections::HashMap::new();
-        if let Some(sinks) = sinks_json.as_array() {
-            for s in sinks {
-                if let (Some(idx), Some(name)) = (s.get("index").and_then(|v| v.as_u64()), s.get("name").and_then(|v| v.as_str())) {
-                    sink_id_to_name.insert(idx, name.to_string());
-                }
-            }
-        }
+        let moves = Self::compute_surround_moves(
+            &inputs_json,
+            &sinks_json,
+            surround_out_node,
+            surround_in_node,
+            game_sink,
+            system_sink,
+            keep_off_apps,
+        );
 
-        let keep_off_set: HashSet<&str> = keep_off_apps.iter().copied().collect();
-
-        if let Some(inputs) = inputs_json.as_array() {
-            for inp in inputs {
-                let stream_idx = match inp.get("index").and_then(|v| v.as_u64()) {
-                    Some(i) => i,
-                    None => continue,
-                };
-                let curr_sink_id = inp.get("sink").and_then(|v| v.as_u64()).unwrap_or(u64::MAX);
-                let curr_sink_name = sink_id_to_name.get(&curr_sink_id).map(|s| s.as_str()).unwrap_or("");
-                let props = inp.get("properties");
-                let node_name = props.and_then(|p| p.get("node.name")).and_then(|v| v.as_str()).unwrap_or("");
-                let app_name = props.and_then(|p| p.get("application.name")).and_then(|v| v.as_str()).unwrap_or("");
-
-                // 1. Move VSM output to Game channel if misplaced
-                if node_name == surround_out_node && curr_sink_name != game_sink {
-                    info!("Moving VSM stream #{} from '{}' to '{}'", stream_idx, curr_sink_name, game_sink);
-                    let _ = Command::new("pactl")
-                        .args(["move-sink-input", &stream_idx.to_string(), game_sink])
-                        .status()
-                        .await;
-                }
-                // 2. Move isolated apps (e.g. Zen) back to System if VSM grabbed them
-                else if keep_off_set.contains(app_name) && curr_sink_name == surround_in_node {
-                    info!("Moving app '{}' stream #{} back to '{}'", app_name, stream_idx, system_sink);
-                    let _ = Command::new("pactl")
-                        .args(["move-sink-input", &stream_idx.to_string(), system_sink])
-                        .status()
-                        .await;
-                }
-            }
+        for (stream_idx, target_sink) in moves {
+            info!("Enforcing policy: moving stream #{} to '{}'", stream_idx, target_sink);
+            let _ = Command::new("pactl")
+                .args(["move-sink-input", &stream_idx.to_string(), &target_sink])
+                .status()
+                .await;
         }
 
         Ok(())
+    }
+
+    /// Pure parser: follow sink-input lines to find which target sink index the virtual node feeds.
+    pub fn parse_downstream_target_index(stdout: &str, virt_sink: &str) -> Option<String> {
+        let mut current_target = String::new();
+
+        for line in stdout.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("Sink: ") {
+                current_target = trimmed.trim_start_matches("Sink: ").to_string();
+            } else if trimmed.starts_with("node.name = ") {
+                let node_name = trimmed.trim_start_matches("node.name = ").trim_matches('"');
+                if node_name.starts_with(virt_sink) && !current_target.is_empty() {
+                    return Some(current_target);
+                }
+            }
+        }
+        None
     }
 
     /// Resolve a DSP sink down to its physical host sink (Omarchy volume law).
@@ -278,22 +326,23 @@ impl PulseManager {
 
         if let Ok(out) = inputs_out {
             let stdout = String::from_utf8_lossy(&out.stdout);
-            let mut current_target = String::new();
-
-            for line in stdout.lines() {
-                let trimmed = line.trim();
-                if trimmed.starts_with("Sink: ") {
-                    current_target = trimmed.trim_start_matches("Sink: ").to_string();
-                } else if trimmed.starts_with("node.name = ") {
-                    let node_name = trimmed.trim_start_matches("node.name = ").trim_matches('"');
-                    if node_name.starts_with(sink) && !current_target.is_empty() {
-                        return Self::get_sink_name_by_index(&current_target).await.unwrap_or(sink.to_string());
-                    }
-                }
+            if let Some(target_idx) = Self::parse_downstream_target_index(&stdout, sink) {
+                return Self::get_sink_name_by_index(&target_idx).await.unwrap_or(sink.to_string());
             }
         }
 
         sink.to_string()
+    }
+
+    /// Pure parser: Find sink name from short output by index.
+    pub fn parse_sink_name_by_index(stdout: &str, index: &str) -> Option<String> {
+        for line in stdout.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 && parts[0] == index {
+                return Some(parts[1].to_string());
+            }
+        }
+        None
     }
 
     async fn get_sink_name_by_index(index: &str) -> Option<String> {
@@ -304,12 +353,6 @@ impl PulseManager {
             .ok()?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        for line in stdout.lines() {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 2 && parts[0] == index {
-                return Some(parts[1].to_string());
-            }
-        }
-        None
+        Self::parse_sink_name_by_index(&stdout, index)
     }
 }
