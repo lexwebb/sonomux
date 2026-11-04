@@ -22,6 +22,14 @@ export struct CategoryRow {
     choice: int,
 }
 
+export struct HelperRow {
+    index: int,
+    device: string,
+    status: string,
+    // Button label; "" = nothing to do.
+    action: string,
+}
+
 export struct RuleRow {
     name: string,
     enabled: bool,
@@ -190,6 +198,9 @@ export component MainWindow inherits Window {
     in property <bool> split-unpaired;
     in property <[[StandardListViewItem]]> other-rows;
 
+    // Hardware helpers for connected devices
+    in property <[HelperRow]> helpers;
+
     // Rules
     in property <[RuleRow]> rules;
 
@@ -203,6 +214,7 @@ export component MainWindow inherits Window {
     callback set-keep-defaults(bool);
     callback set-split-unpaired(bool);
     callback rule-enabled(string, bool);
+    callback install-helper(int);
 
     function fader-label(f: string) -> string {
         f == "" ? "No fader" : "Fader " + f
@@ -473,6 +485,32 @@ export component MainWindow inherits Window {
                         ? "Sonomux gives each channel of your hardware its own device, so apps can pick it."
                         : "On Linux, PipeWire manages devices; Sonomux routes between them.";
                 }
+                GroupBox {
+                    title: "Hardware support";
+                    vertical-stretch: 0;
+                    VerticalLayout {
+                        spacing: 8px;
+                        if root.helpers.length == 0: Hint {
+                            text: "No supported hardware connected. Sonomux needs no extra software until you plug some in.";
+                        }
+                        for h in root.helpers: HorizontalLayout {
+                            spacing: 12px;
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                Label { text: h.device; font-weight: 600; }
+                                Hint { text: h.status; }
+                            }
+                            if h.action != "": VerticalLayout {
+                                alignment: center;
+                                Button {
+                                    text: h.action;
+                                    primary: true;
+                                    clicked => { root.install-helper(h.index); }
+                                }
+                            }
+                        }
+                    }
+                }
                 if root.devices-supported: GroupBox {
                     title: "Default devices";
                     vertical-stretch: 0;
@@ -512,7 +550,7 @@ export component MainWindow inherits Window {
                         spacing: 4px;
                         StandardTableView {
                             // Header plus one line per device; the list never needs to scroll.
-                            height: 32px + root.split-rows.length * 28px;
+                            height: 34px + root.split-rows.length * 21px;
                             columns: [
                                 { title: "Device", horizontal-stretch: 2 },
                                 { title: "Plays to", horizontal-stretch: 1 },
@@ -535,7 +573,7 @@ export component MainWindow inherits Window {
                     title: "Other hardware";
                     vertical-stretch: 0;
                     StandardTableView {
-                        height: 32px + root.other-rows.length * 28px;
+                        height: 34px + root.other-rows.length * 21px;
                         columns: [
                             { title: "Device", horizontal-stretch: 2 },
                             { title: "Status", horizontal-stretch: 1 },

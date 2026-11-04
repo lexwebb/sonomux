@@ -3,6 +3,8 @@
 
 slint::include_modules!();
 
+mod hardware;
+
 use slint::{ModelRc, SharedString, StandardListViewItem, VecModel};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -206,16 +208,44 @@ struct Slow {
     splits: Vec<(String, String, String)>,
     other: Vec<(String, String)>,
     rules: Vec<(String, bool)>,
+    /// (helper index, device, status, button label)
+    helpers: Vec<(i32, String, String, String)>,
+}
+
+/// In-progress or failed helper installs, by helper index, shown instead of the usual status.
+type InstallNotes = Arc<Mutex<HashMap<usize, String>>>;
+
+fn helper_rows(notes: &InstallNotes) -> Vec<(i32, String, String, String)> {
+    let notes = notes.lock().unwrap();
+    hardware::detect()
+        .into_iter()
+        .map(|(i, installed)| {
+            let h = &hardware::HELPERS[i];
+            let (status, action) = if installed {
+                (format!("Connected · {} installed", h.name), String::new())
+            } else if let Some(note) = notes.get(&i) {
+                (note.clone(), String::new())
+            } else {
+                (
+                    format!("Connected · needs {} for full support", h.name),
+                    hardware::action_label(h),
+                )
+            };
+            (i as i32, h.device.to_string(), status, action)
+        })
+        .collect()
 }
 
 async fn read_slow(
     proxy: Option<&SonomuxDaemonProxy<'_>>,
     goxlr: &sonomux_device_goxlr::GoXLRClient,
     headset_sink: &str,
+    notes: &InstallNotes,
 ) -> Slow {
     let mut s = Slow {
         faders: goxlr.get_fader_channels().await.unwrap_or_default(),
         headset_present: sonomux_backend::Backend::sink_exists(headset_sink).await,
+        helpers: helper_rows(notes),
         ..Default::default()
     };
     let mutes = match proxy {
@@ -355,6 +385,19 @@ fn apply_slow(ui: &MainWindow, s: &Slow, prev: Option<&Slow>) {
                 .iter()
                 .map(|(n, note)| vec![n.as_str(), note.as_str()]),
         ));
+    }
+    if prev.is_none_or(|p| p.helpers != s.helpers) {
+        let rows: Vec<HelperRow> = s
+            .helpers
+            .iter()
+            .map(|(index, device, status, action)| HelperRow {
+                index: *index,
+                device: device.into(),
+                status: status.into(),
+                action: action.into(),
+            })
+            .collect();
+        ui.set_helpers(ModelRc::new(VecModel::from(rows)));
     }
     if prev.is_none_or(|p| p.rules != s.rules) {
         let rows: Vec<RuleRow> = s
@@ -569,17 +612,19 @@ async fn main() -> anyhow::Result<()> {
 
     // Slow poll: fader order, mutes, apps, devices, rules. Wakes early after a change.
     let refresh = Arc::new(Notify::new());
+    let notes: InstallNotes = Arc::default();
     {
-        let (weak, proxy, goxlr, refresh) = (
+        let (weak, proxy, goxlr, refresh, notes) = (
             ui.as_weak(),
             proxy.clone(),
             goxlr.clone(),
             Arc::clone(&refresh),
+            Arc::clone(&notes),
         );
         tokio::spawn(async move {
             let mut prev: Option<Slow> = None;
             loop {
-                let s = read_slow(proxy.as_ref(), &goxlr, &headset_sink).await;
+                let s = read_slow(proxy.as_ref(), &goxlr, &headset_sink, &notes).await;
                 if prev.as_ref() != Some(&s) {
                     let (s2, p2) = (s.clone(), prev.clone());
                     let _ = weak.upgrade_in_event_loop(move |ui| apply_slow(&ui, &s2, p2.as_ref()));
@@ -724,6 +769,36 @@ async fn main() -> anyhow::Result<()> {
             let name = name.to_string();
             with_proxy(&proxy, &refresh, move |p| async move {
                 let _ = p.set_rule_enabled(name, on).await;
+            });
+        });
+    }
+
+    {
+        let (notes, refresh) = (Arc::clone(&notes), Arc::clone(&refresh));
+        ui.on_install_helper(move |index| {
+            let i = index as usize;
+            let Some(h) = hardware::HELPERS.get(i) else {
+                return;
+            };
+            notes
+                .lock()
+                .unwrap()
+                .insert(i, format!("Installing {}…", h.name));
+            refresh.notify_one();
+            let (notes, refresh) = (Arc::clone(&notes), Arc::clone(&refresh));
+            tokio::task::spawn_blocking(move || {
+                let mut n = notes.lock().unwrap();
+                match hardware::install(h) {
+                    // The system installer or terminal takes it from here; the row turns to
+                    // "installed" once the helper appears.
+                    Ok(()) => n.insert(
+                        i,
+                        format!("Finish installing {} in the window that opened", h.name),
+                    ),
+                    Err(e) => n.insert(i, format!("Couldn't install {}: {}", h.name, e)),
+                };
+                drop(n);
+                refresh.notify_one();
             });
         });
     }
