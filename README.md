@@ -73,62 +73,81 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for full trait specifications a
 
 ---
 
-## Code-less / Declarative Configuration (Stretch Goal)
+## Declarative Rule Engine
 
-Sonomux is designed to support declarative configuration files (`config.toml`), allowing users and contributors to configure complex switching behaviors and device mappings without writing code:
+Sonomux features a built-in declarative rule engine configured via TOML (`config.toml`), allowing users to automate routing changes, speaker mutes, volume levels, and loopbacks based on hardware state transitions without writing code:
 
 ```toml
-[devices.goxlr]
-type = "goxlr"
-connection = "ipc"
+[general]
+poll_interval_ms = 1000
+log_level = "info"
 
-[devices.headset]
-type = "hid_battery"
-vendor_id = 0x1038
-product_id = 0x12ad
+[headset]
+device_name = "Arctis Nova 7"
+debounce_ms = 1500
+mic_source_name = "alsa_input.usb-SteelSeries_Arctis_Nova_7-00.mono-fallback"
+sink_name = "alsa_output.usb-SteelSeries_Arctis_Nova_7-00.analog-stereo"
+
+[goxlr]
+socket_path = "/tmp/goxlr.socket"
+speakers_channel = "Headphones"
+feed_source_name = "alsa_output.usb-TC-Helicon_GoXLRMini-00.analog-chat.monitor"
 
 [[rules]]
 name = "Auto Headset Switcher"
-trigger.device = "headset"
-trigger.condition = "status == 'Active'"
+description = "Mute desk speakers and route GoXLR submix to wireless headset when powered on"
+enabled = true
 debounce_ms = 1500
 
-[[rules.actions_on_enter]]
-type = "loopback"
-source = "goxlr:Line5"
-sink = "headset:Sink"
+[rules.trigger]
+type = "device_status"
+device = "headset"
+status = "Active"
 
 [[rules.actions_on_enter]]
-type = "hardware_volume"
-device = "goxlr"
+type = "create_loopback"
+source = "alsa_output.usb-TC-Helicon_GoXLRMini-00.analog-chat.monitor"
+sink = "alsa_output.usb-SteelSeries_Arctis_Nova_7-00.analog-stereo"
+
+[[rules.actions_on_enter]]
+type = "set_volume"
 channel = "Headphones"
-set_mute = true
+volume = 0
+slot = "speakers"
 
 [[rules.actions_on_exit]]
-type = "hardware_volume"
-device = "goxlr"
+type = "destroy_loopback"
+
+[[rules.actions_on_exit]]
+type = "restore_volume"
 channel = "Headphones"
-set_mute = false
-restore_previous = true
+slot = "speakers"
+fallback = 204
 ```
 
 ---
 
 ## Roadmap
 
-- [ ] **Phase 1: Core Trait Architecture & Linux Engine**
-  - Define `audio-core` capability traits.
-  - Implement `device-headset` (HID / HeadsetControl debounced presence detection).
-  - Implement `device-goxlr` (GoXLR IPC bridge, router matrix setup, speaker mute/restore).
-  - Implement `audio-backend-pipewire` (robust loopback management, stream pinning).
-- [ ] **Phase 2: Slint Native GUI & Omarchy Integration**
-  - Native Slint dashboard showing device status, battery level, active profiles, and manual override switches.
-  - D-Bus interface for desktop status bars (Omarchy shell widget, Waybar, etc.).
-- [ ] **Phase 3: Declarative Rule Engine**
-  - TOML-based declarative configuration for zero-code custom device setup.
-- [ ] **Phase 4: macOS CoreAudio Support**
-  - Implement `audio-backend-coreaudio` aggregate device and routing layer.
-  - Additional community device drivers (Elgato Wave XLR, Rodecaster Pro, Focusrite).
+- [x] **Phase 1: Core Trait Architecture & Linux Engine**
+  - [x] Capability trait system (`AudioDevice`, `HasPresenceDetection`, `HasHardwareVolume`, `HasRoutingMatrix`).
+  - [x] SteelSeries Arctis Nova 7 wireless watcher with debounced HID/battery presence telemetry.
+  - [x] TC-Helicon GoXLR Mini client via Unix domain socket IPC (`/tmp/goxlr.socket`).
+  - [x] PipeWire / PulseAudio graph manager with automated loopback fallback recovery and stream pinning.
+- [x] **Phase 2: Slint Native GUI & Omarchy Integration**
+  - [x] Native Slint GUI dashboard (`sonomux-gui`) with real-time volume faders, mute controls, battery indicators, and live daemon status badge.
+  - [x] Session D-Bus service (`org.sonomux.Daemon`) and CLI controller (`sonomuxctl`).
+  - [x] Omarchy status bar widget with dynamic icons, tooltip telemetry, left-click mute toggle, and right-click GUI launcher.
+  - [x] Hands-free installer (`install.sh`), systemd user service (`sonomuxd.service`), XDG desktop launcher, and Arch packaging (`PKGBUILD`).
+- [x] **Phase 3: Declarative Rule Engine**
+  - [x] TOML-based declarative configuration schema (`config.toml`).
+  - [x] Composable triggers: device presence, battery level thresholds, audio node presence, and boolean logic.
+  - [x] Action executor: loopback creation/destruction, volume ramping, mute toggles, and state restoration on exit.
+  - [x] Robust test suite maintaining $\ge 85\%$ test coverage with automated CI enforcement and coverage badges.
+- [ ] **Phase 4: macOS CoreAudio Support & Hardware Ecosystem**
+  - [ ] Implement `audio-backend-coreaudio` aggregate device and multi-output routing layer.
+  - [ ] Additional community device drivers (Elgato Wave XLR, Rodecaster Pro, BEACN, Focusrite).
+  - [ ] Visual audio graph routing canvas within Slint GUI.
 
 ---
 
