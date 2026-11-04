@@ -4,19 +4,199 @@ use tracing::info;
 use zbus::proxy;
 
 slint! {
-    import { Button, Slider, VerticalBox, HorizontalBox, GroupBox } from "std-widgets.slint";
+    import { Button, Slider, VerticalBox, HorizontalBox } from "std-widgets.slint";
+
+    component SidebarItem inherits Rectangle {
+        in-out property <string> text;
+        in-out property <string> icon;
+        in-out property <bool> active: false;
+        callback clicked();
+
+        height: 40px;
+        border-radius: 8px;
+        background: root.active ? #363a4f : (touch.has-hover ? #24273a : transparent);
+
+        HorizontalLayout {
+            padding-left: 14px;
+            padding-right: 14px;
+            spacing: 12px;
+
+            Text {
+                text: root.icon;
+                font-size: 15px;
+                color: root.active ? #8aadf4 : #a5adcb;
+                vertical-alignment: center;
+            }
+
+            Text {
+                text: root.text;
+                font-size: 13px;
+                font-weight: root.active ? 700 : 500;
+                color: root.active ? #cad3f5 : #a5adcb;
+                vertical-alignment: center;
+            }
+        }
+
+        touch := TouchArea {
+            clicked => { root.clicked(); }
+        }
+    }
+
+    component ChannelFader inherits Rectangle {
+        in-out property <float> value: 100.0;
+        in-out property <color> fill_color: #8aadf4;
+        in-out property <bool> is_muted: false;
+        callback changed(float);
+
+        width: 32px;
+        height: 200px;
+        background: #11121d;
+        border-radius: 6px;
+        border-width: 1px;
+        border-color: #363a4f;
+        clip: true;
+
+        Rectangle {
+            y: parent.height - self.height;
+            width: parent.width;
+            height: Math.max(0px, parent.height * (root.value / 100.0));
+            background: root.is_muted ? #ed8796 : root.fill_color;
+            border-radius: 4px;
+        }
+
+        Rectangle {
+            y: (parent.height - self.height) * (1.0 - (root.value / 100.0));
+            width: parent.width + 4px;
+            x: -2px;
+            height: 12px;
+            border-radius: 3px;
+            background: #f4dbd6;
+            border-width: 1px;
+            border-color: #181926;
+        }
+
+        TouchArea {
+            moved => {
+                if (self.pressed) {
+                    let rel = 1.0 - (self.mouse-y / parent.height);
+                    let clamped = Math.max(0.0, Math.min(1.0, rel));
+                    root.value = clamped * 100.0;
+                    root.changed(root.value);
+                }
+            }
+            clicked => {
+                let rel = 1.0 - (self.mouse-y / parent.height);
+                let clamped = Math.max(0.0, Math.min(1.0, rel));
+                root.value = clamped * 100.0;
+                root.changed(root.value);
+            }
+        }
+    }
+
+    component ChannelStrip inherits Rectangle {
+        in-out property <string> name;
+        in-out property <string> tag;
+        in-out property <color> tag_color: #8aadf4;
+        in-out property <float> volume: 100.0;
+        in-out property <bool> muted: false;
+        in-out property <bool> highlight: false;
+        callback volume_changed(float);
+        callback toggle_mute();
+
+        background: #1e2030;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: root.highlight ? #c6a0f6 : #363a4f;
+
+        VerticalLayout {
+            padding: 10px;
+            spacing: 8px;
+            alignment: space-between;
+
+            // Tag badge
+            HorizontalLayout {
+                alignment: center;
+                Rectangle {
+                    background: #24273a;
+                    border-radius: 4px;
+                    border-width: 1px;
+                    border-color: root.tag_color;
+                    height: 18px;
+                    HorizontalLayout {
+                        padding-left: 6px;
+                        padding-right: 6px;
+                        Text {
+                            text: root.tag;
+                            font-size: 9px;
+                            font-weight: 700;
+                            color: root.tag_color;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+
+            // Name
+            Text {
+                text: root.name;
+                font-size: 13px;
+                font-weight: 700;
+                color: #cad3f5;
+                horizontal-alignment: center;
+            }
+
+            // Vertical Fader
+            HorizontalLayout {
+                alignment: center;
+                ChannelFader {
+                    value: root.volume;
+                    fill_color: root.tag_color;
+                    is_muted: root.muted;
+                    changed(val) => {
+                        root.volume = val;
+                        root.volume_changed(val);
+                    }
+                }
+            }
+
+            // Numeric readout
+            Text {
+                text: root.muted ? "MUTED" : Math.round(root.volume) + "%";
+                font-size: 12px;
+                font-weight: 700;
+                color: root.muted ? #ed8796 : #eed49f;
+                horizontal-alignment: center;
+            }
+
+            // Mute Button
+            Button {
+                text: root.muted ? "MUTED" : "MUTE";
+                clicked => { root.toggle_mute(); }
+            }
+        }
+    }
 
     export component MainWindow inherits Window {
         title: "Sonomux Audio Coordinator";
-        min-width: 520px;
+        min-width: 900px;
         min-height: 600px;
         background: #181926;
+
+        in-out property <int> active_tab: 0;
 
         in-out property <string> daemon_status: "Connecting...";
         in-out property <color> daemon_color: #eed49f;
         in-out property <string> goxlr_status: "Checking...";
         in-out property <string> goxlr_serial: "--";
         in-out property <float> speaker_volume: 100.0;
+        in-out property <float> headset_volume: 80.0;
+        in-out property <float> system_volume: 100.0;
+        in-out property <float> game_volume: 85.0;
+        in-out property <float> chat_volume: 90.0;
+        in-out property <float> music_volume: 70.0;
+
+        in-out property <bool> speakers_muted: false;
+        in-out property <bool> headset_active: false;
         in-out property <string> headset_status: "Standby (Off)";
         in-out property <string> headset_battery: "Unavailable";
         in-out property <string> routing_state: "Auto (PipeWire)";
@@ -25,200 +205,586 @@ slint! {
         callback toggle_speakers();
         callback force_routing_refresh();
 
-        VerticalBox {
-            padding: 20px;
-            spacing: 16px;
-
-            // Header
-            HorizontalBox {
-                alignment: space-between;
-                VerticalBox {
-                    spacing: 2px;
-                    Text {
-                        text: "Sonomux 🎛️";
-                        font-size: 22px;
-                        font-weight: 700;
-                        color: #cad3f5;
-                    }
-                    Text {
-                        text: "Unified Audio Coordinator";
-                        font-size: 12px;
-                        color: #8087a2;
-                    }
-                }
-                VerticalBox {
-                    alignment: center;
-                    HorizontalBox {
-                        spacing: 8px;
-                        Rectangle {
-                            width: 10px;
-                            height: 10px;
-                            border-radius: 5px;
-                            background: root.daemon_color;
-                            y: 4px;
-                        }
-                        Text {
-                            text: root.daemon_status;
-                            font-size: 13px;
-                            color: root.daemon_color;
-                            font-weight: 600;
-                        }
-                    }
-                }
-            }
-
-            // GoXLR Card
+        HorizontalLayout {
+            // Left Navigation Sidebar
             Rectangle {
-                background: #24273a;
-                border-radius: 12px;
+                width: 190px;
+                background: #1e2030;
                 border-width: 1px;
                 border-color: #363a4f;
 
-                VerticalBox {
-                    padding: 14px;
-                    spacing: 10px;
+                VerticalLayout {
+                    padding-top: 16px;
+                    padding-bottom: 16px;
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    spacing: 6px;
 
-                    HorizontalBox {
-                        alignment: space-between;
+                    // Header
+                    HorizontalLayout {
+                        spacing: 8px;
+                        padding-left: 8px;
+                        padding-bottom: 12px;
                         Text {
-                            text: "TC-Helicon GoXLR Mini";
-                            font-size: 16px;
-                            font-weight: 600;
-                            color: #c6a0f6;
-                        }
-                        Text {
-                            text: root.goxlr_status;
-                            font-size: 13px;
-                            color: #a6da95;
-                            font-weight: 500;
-                        }
-                    }
-
-                    HorizontalBox {
-                        Text {
-                            text: "Device Serial: " + root.goxlr_serial;
-                            font-size: 12px;
-                            color: #a5adcb;
-                        }
-                    }
-
-                    HorizontalBox {
-                        Text {
-                            text: "Desk Speakers (Headphone Jack)";
-                            font-size: 13px;
-                            color: #cad3f5;
+                            text: "🎛️";
+                            font-size: 20px;
                             vertical-alignment: center;
                         }
-                    }
-
-                    HorizontalBox {
-                        Slider {
-                            minimum: 0.0;
-                            maximum: 100.0;
-                            value: root.speaker_volume;
-                            changed(val) => {
-                                root.volume_changed(val);
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 1px;
+                            Text {
+                                text: "Sonomux";
+                                font-size: 16px;
+                                font-weight: 800;
+                                color: #cad3f5;
+                            }
+                            Text {
+                                text: "Audio Coordinator";
+                                font-size: 10px;
+                                color: #8087a2;
                             }
                         }
+                    }
+
+                    Rectangle {
+                        height: 1px;
+                        background: #363a4f;
+                    }
+
+                    // Navigation Tabs
+                    SidebarItem {
+                        icon: "󰓃";
+                        text: "Mixer Deck";
+                        active: root.active_tab == 0;
+                        clicked => { root.active_tab = 0; }
+                    }
+
+                    SidebarItem {
+                        icon: "󰋋";
+                        text: "Devices";
+                        active: root.active_tab == 1;
+                        clicked => { root.active_tab = 1; }
+                    }
+
+                    SidebarItem {
+                        icon: "󰒓";
+                        text: "Rule Studio";
+                        active: root.active_tab == 2;
+                        clicked => { root.active_tab = 2; }
+                    }
+
+                    SidebarItem {
+                        icon: "󰑭";
+                        text: "Policies";
+                        active: root.active_tab == 3;
+                        clicked => { root.active_tab = 3; }
+                    }
+
+                    // Bottom metadata
+                    Rectangle { vertical-stretch: 1; }
+
+                    Rectangle {
+                        height: 1px;
+                        background: #363a4f;
+                    }
+
+                    VerticalLayout {
+                        padding-top: 8px;
+                        padding-left: 8px;
+                        spacing: 2px;
                         Text {
-                            text: Math.round(root.speaker_volume) + "%";
-                            font-size: 13px;
-                            color: #eed49f;
-                            min-width: 45px;
-                            horizontal-alignment: right;
-                            vertical-alignment: center;
+                            text: "v0.1.0 • Slint Native";
+                            font-size: 10px;
+                            color: #6e738d;
                         }
-                        Button {
-                            text: "Mute/Unmute";
-                            clicked => { root.toggle_speakers(); }
+                        Text {
+                            text: "GPL-3.0 Open Source";
+                            font-size: 9px;
+                            color: #5b6078;
                         }
                     }
                 }
             }
 
-            // Headset Card
+            // Main Content Area
             Rectangle {
-                background: #24273a;
-                border-radius: 12px;
-                border-width: 1px;
-                border-color: #363a4f;
+                horizontal-stretch: 1;
+                background: #181926;
 
-                VerticalBox {
-                    padding: 14px;
-                    spacing: 10px;
+                VerticalLayout {
+                    padding-top: 18px;
+                    padding-bottom: 18px;
+                    padding-left: 22px;
+                    padding-right: 22px;
+                    spacing: 16px;
 
-                    HorizontalBox {
+                    // Top Bar with Headset Battery & Daemon Status
+                    HorizontalLayout {
                         alignment: space-between;
-                        Text {
-                            text: "Arctis Nova 7 (Wireless)";
-                            font-size: 16px;
-                            font-weight: 600;
-                            color: #8aadf4;
+
+                        VerticalLayout {
+                            spacing: 2px;
+                            Text {
+                                text: root.active_tab == 0 ? "Mixer Deck" :
+                                      root.active_tab == 1 ? "Hardware & Peripherals" :
+                                      root.active_tab == 2 ? "Declarative Rule Studio" : "Audio Routing Policies";
+                                font-size: 20px;
+                                font-weight: 800;
+                                color: #cad3f5;
+                            }
+                            Text {
+                                text: root.active_tab == 0 ? "Hardware mixer channels and physical output endpoints" :
+                                      root.active_tab == 1 ? "Connected audio interfaces, DACs, and wireless receivers" :
+                                      root.active_tab == 2 ? "Deterministic automation rules and signal arbiters" : "Stream pinning and DSP graph enforcement";
+                                font-size: 12px;
+                                color: #8087a2;
+                            }
                         }
-                        Text {
-                            text: root.headset_status;
-                            font-size: 13px;
-                            color: #eed49f;
-                            font-weight: 500;
+
+                        HorizontalLayout {
+                            spacing: 10px;
+                            alignment: center;
+
+                            // Battery Pill
+                            Rectangle {
+                                background: #24273a;
+                                border-radius: 14px;
+                                border-width: 1px;
+                                border-color: #363a4f;
+                                height: 28px;
+                                HorizontalLayout {
+                                    padding-left: 10px;
+                                    padding-right: 10px;
+                                    spacing: 6px;
+                                    Text {
+                                        text: "󰋋";
+                                        font-size: 12px;
+                                        color: root.headset_active ? #a6da95 : #eed49f;
+                                        vertical-alignment: center;
+                                    }
+                                    Text {
+                                        text: root.headset_active ? "Arctis 7: " + root.headset_battery : "Arctis 7: Standby";
+                                        font-size: 11px;
+                                        font-weight: 600;
+                                        color: #cad3f5;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+
+                            // Daemon Status Pill
+                            Rectangle {
+                                background: #24273a;
+                                border-radius: 14px;
+                                border-width: 1px;
+                                border-color: #363a4f;
+                                height: 28px;
+                                HorizontalLayout {
+                                    padding-left: 10px;
+                                    padding-right: 10px;
+                                    spacing: 6px;
+                                    Rectangle {
+                                        width: 8px;
+                                        height: 8px;
+                                        border-radius: 4px;
+                                        background: root.daemon_color;
+                                        y: 10px;
+                                    }
+                                    Text {
+                                        text: root.daemon_status;
+                                        font-size: 11px;
+                                        font-weight: 600;
+                                        color: root.daemon_color;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
                         }
                     }
 
-                    HorizontalBox {
-                        Text {
-                            text: "Battery: " + root.headset_battery;
-                            font-size: 13px;
-                            color: #cad3f5;
+                    // TAB 0: THE STUDIO DECK (Homepage)
+                    if root.active_tab == 0 : VerticalLayout {
+                        spacing: 14px;
+                        vertical-stretch: 1;
+
+                        // 6-Channel Strips Grid
+                        HorizontalLayout {
+                            spacing: 12px;
+                            vertical-stretch: 1;
+
+                            ChannelStrip {
+                                name: "System";
+                                tag: "IPC";
+                                tag_color: #8aadf4;
+                                volume: root.system_volume;
+                                muted: false;
+                                volume_changed(v) => { root.system_volume = v; }
+                                toggle_mute() => {}
+                            }
+
+                            ChannelStrip {
+                                name: "Game";
+                                tag: "7.1 DSP";
+                                tag_color: #c6a0f6;
+                                highlight: true;
+                                volume: root.game_volume;
+                                muted: false;
+                                volume_changed(v) => { root.game_volume = v; }
+                                toggle_mute() => {}
+                            }
+
+                            ChannelStrip {
+                                name: "Chat";
+                                tag: "VOIP";
+                                tag_color: #8bd5ca;
+                                volume: root.chat_volume;
+                                muted: false;
+                                volume_changed(v) => { root.chat_volume = v; }
+                                toggle_mute() => {}
+                            }
+
+                            ChannelStrip {
+                                name: "Music";
+                                tag: "MEDIA";
+                                tag_color: #f5a97f;
+                                volume: root.music_volume;
+                                muted: false;
+                                volume_changed(v) => { root.music_volume = v; }
+                                toggle_mute() => {}
+                            }
+
+                            ChannelStrip {
+                                name: "Speakers";
+                                tag: "OUT";
+                                tag_color: #eed49f;
+                                volume: root.speaker_volume;
+                                muted: root.speaker_volume <= 0.0;
+                                volume_changed(v) => {
+                                    root.speaker_volume = v;
+                                    root.volume_changed(v);
+                                }
+                                toggle_mute() => {
+                                    root.toggle_speakers();
+                                }
+                            }
+
+                            ChannelStrip {
+                                name: "Arctis 7";
+                                tag: "WIRELESS";
+                                tag_color: root.headset_active ? #a6da95 : #8087a2;
+                                volume: root.headset_volume;
+                                muted: !root.headset_active;
+                                volume_changed(v) => { root.headset_volume = v; }
+                                toggle_mute() => {}
+                            }
+                        }
+
+                        // Bottom Automation Ribbon
+                        Rectangle {
+                            height: 38px;
+                            background: #1e2030;
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: #363a4f;
+
+                            HorizontalLayout {
+                                padding-left: 14px;
+                                padding-right: 14px;
+                                alignment: space-between;
+
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    Text {
+                                        text: "⚡ Automation State:";
+                                        font-size: 11px;
+                                        font-weight: 700;
+                                        color: #a6da95;
+                                        vertical-alignment: center;
+                                    }
+                                    Text {
+                                        text: root.headset_active ?
+                                            "Headset Active ➔ Speakers Muted (0%) ➔ Loopback Streaming to Arctis Nova 7" :
+                                            "Headset Standby ➔ Speakers Restored to 100% ➔ Loopback Unloaded";
+                                        font-size: 11px;
+                                        color: #cad3f5;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                Text {
+                                    text: "Downstream DSP Traversal: Active (Unity Gain)";
+                                    font-size: 10px;
+                                    color: #8087a2;
+                                    vertical-alignment: center;
+                                }
+                            }
                         }
                     }
 
-                    Text {
-                        text: "Presence detected via low-level HID battery telemetry to prevent ghost-dongle misrouting.";
-                        font-size: 11px;
-                        color: #6e738d;
-                    }
-                }
-            }
+                    // TAB 1: DEVICES & HARDWARE
+                    if root.active_tab == 1 : VerticalLayout {
+                        spacing: 14px;
+                        vertical-stretch: 1;
 
-            // Audio Stream Policy Card
-            Rectangle {
-                background: #24273a;
-                border-radius: 12px;
-                border-width: 1px;
-                border-color: #363a4f;
+                        // GoXLR Card
+                        Rectangle {
+                            background: #1e2030;
+                            border-radius: 12px;
+                            border-width: 1px;
+                            border-color: #363a4f;
 
-                VerticalBox {
-                    padding: 14px;
-                    spacing: 8px;
+                            VerticalLayout {
+                                padding: 16px;
+                                spacing: 10px;
 
-                    Text {
-                        text: "Stream Routing Policies";
-                        font-size: 14px;
-                        font-weight: 600;
-                        color: #f5bde6;
-                    }
+                                HorizontalLayout {
+                                    alignment: space-between;
+                                    Text {
+                                        text: "TC-Helicon GoXLR Mini";
+                                        font-size: 16px;
+                                        font-weight: 700;
+                                        color: #c6a0f6;
+                                    }
+                                    Text {
+                                        text: root.goxlr_status;
+                                        font-size: 12px;
+                                        font-weight: 600;
+                                        color: #a6da95;
+                                    }
+                                }
 
-                    Text {
-                        text: "• Virtual Surround Manager -> GoXLR Game";
-                        font-size: 12px;
-                        color: #a5adcb;
-                    }
-                    Text {
-                        text: "• Browser (Zen) -> Isolated on GoXLR System";
-                        font-size: 12px;
-                        color: #a5adcb;
-                    }
-                    Text {
-                        text: "• Headset Loopback: " + root.routing_state;
-                        font-size: 12px;
-                        color: #a5adcb;
-                    }
+                                Text {
+                                    text: "Hardware Serial: " + root.goxlr_serial + " • Unix Socket: /tmp/goxlr.socket";
+                                    font-size: 12px;
+                                    color: #a5adcb;
+                                }
 
-                    HorizontalBox {
-                        alignment: end;
-                        Button {
-                            text: "Enforce Policies Now";
-                            clicked => { root.force_routing_refresh(); }
+                                Text {
+                                    text: "Physical Routing: Headphones DAC Jack routed to Desk Speakers at 0-255 hardware steps.";
+                                    font-size: 11px;
+                                    color: #6e738d;
+                                }
+                            }
                         }
+
+                        // Arctis Nova 7 Card
+                        Rectangle {
+                            background: #1e2030;
+                            border-radius: 12px;
+                            border-width: 1px;
+                            border-color: #363a4f;
+
+                            VerticalLayout {
+                                padding: 16px;
+                                spacing: 10px;
+
+                                HorizontalLayout {
+                                    alignment: space-between;
+                                    Text {
+                                        text: "SteelSeries Arctis Nova 7 (Wireless)";
+                                        font-size: 16px;
+                                        font-weight: 700;
+                                        color: #8aadf4;
+                                    }
+                                    Text {
+                                        text: root.headset_status;
+                                        font-size: 12px;
+                                        font-weight: 600;
+                                        color: root.headset_active ? #a6da95 : #eed49f;
+                                    }
+                                }
+
+                                Text {
+                                    text: "Battery Gauge: " + root.headset_battery + " • Vendor ID: 0x1038 • Product ID: 0x12ad";
+                                    font-size: 12px;
+                                    color: #a5adcb;
+                                }
+
+                                Text {
+                                    text: "True presence polling via USB HID battery telemetry to prevent ghost-dongle misrouting.";
+                                    font-size: 11px;
+                                    color: #6e738d;
+                                }
+                            }
+                        }
+
+                        Rectangle { vertical-stretch: 1; }
+                    }
+
+                    // TAB 2: DECLARATIVE RULE STUDIO
+                    if root.active_tab == 2 : VerticalLayout {
+                        spacing: 12px;
+                        vertical-stretch: 1;
+
+                        Rectangle {
+                            background: #1e2030;
+                            border-radius: 10px;
+                            border-width: 1px;
+                            border-color: #363a4f;
+
+                            VerticalLayout {
+                                padding: 14px;
+                                spacing: 6px;
+
+                                HorizontalLayout {
+                                    alignment: space-between;
+                                    Text {
+                                        text: "Rule 1: Auto Headset Switcher";
+                                        font-size: 14px;
+                                        font-weight: 700;
+                                        color: #cad3f5;
+                                    }
+                                    Text {
+                                        text: "[✓] ACTIVE";
+                                        font-size: 11px;
+                                        font-weight: 700;
+                                        color: #a6da95;
+                                    }
+                                }
+                                Text {
+                                    text: "Trigger: headset.status == Active (Debounce: 1500ms)";
+                                    font-size: 11px;
+                                    color: #8aadf4;
+                                }
+                                Text {
+                                    text: "Enter Actions: Mute Desk Speakers (0%) + Load Loopback GoXLR Chat.monitor ➔ Arctis 7";
+                                    font-size: 11px;
+                                    color: #a5adcb;
+                                }
+                                Text {
+                                    text: "Exit Actions: Unload Loopback + Restore Desk Speakers (slot 'speakers' / 100%)";
+                                    font-size: 11px;
+                                    color: #a5adcb;
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            background: #1e2030;
+                            border-radius: 10px;
+                            border-width: 1px;
+                            border-color: #363a4f;
+
+                            VerticalLayout {
+                                padding: 14px;
+                                spacing: 6px;
+
+                                HorizontalLayout {
+                                    alignment: space-between;
+                                    Text {
+                                        text: "Rule 2: Browser Stream Pinning & Isolation";
+                                        font-size: 14px;
+                                        font-weight: 700;
+                                        color: #cad3f5;
+                                    }
+                                    Text {
+                                        text: "[✓] ACTIVE";
+                                        font-size: 11px;
+                                        font-weight: 700;
+                                        color: #a6da95;
+                                    }
+                                }
+                                Text {
+                                    text: "Trigger: node.app_name == 'Zen Browser'";
+                                    font-size: 11px;
+                                    color: #8aadf4;
+                                }
+                                Text {
+                                    text: "Action: Pin playback stream to GoXLR System channel (bypass 7.1 spatializer)";
+                                    font-size: 11px;
+                                    color: #a5adcb;
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            background: #1e2030;
+                            border-radius: 10px;
+                            border-width: 1px;
+                            border-color: #363a4f;
+
+                            VerticalLayout {
+                                padding: 14px;
+                                spacing: 6px;
+
+                                HorizontalLayout {
+                                    alignment: space-between;
+                                    Text {
+                                        text: "Rule 3: Downstream DSP Volume Traversal";
+                                        font-size: 14px;
+                                        font-weight: 700;
+                                        color: #cad3f5;
+                                    }
+                                    Text {
+                                        text: "[✓] ACTIVE";
+                                        font-size: 11px;
+                                        font-weight: 700;
+                                        color: #a6da95;
+                                    }
+                                }
+                                Text {
+                                    text: "Policy: Prevent digital clipping on Virtual Surround DSP node; map levels directly to hardware DAC.";
+                                    font-size: 11px;
+                                    color: #a5adcb;
+                                }
+                            }
+                        }
+
+                        Rectangle { vertical-stretch: 1; }
+                    }
+
+                    // TAB 3: STREAM ROUTING POLICIES
+                    if root.active_tab == 3 : VerticalLayout {
+                        spacing: 14px;
+                        vertical-stretch: 1;
+
+                        Rectangle {
+                            background: #1e2030;
+                            border-radius: 12px;
+                            border-width: 1px;
+                            border-color: #363a4f;
+
+                            VerticalLayout {
+                                padding: 16px;
+                                spacing: 10px;
+
+                                Text {
+                                    text: "PipeWire Audio Graph Policy Enforcement";
+                                    font-size: 15px;
+                                    font-weight: 700;
+                                    color: #f5bde6;
+                                }
+
+                                Text {
+                                    text: "• Virtual Surround Manager (effect_output) ➔ GoXLR Game (HiFi Line 1)";
+                                    font-size: 12px;
+                                    color: #a5adcb;
+                                }
+
+                                Text {
+                                    text: "• Browser Streams (Zen) ➔ Isolated on GoXLR System (HiFi Line 2)";
+                                    font-size: 12px;
+                                    color: #a5adcb;
+                                }
+
+                                Text {
+                                    text: "• Active Loopback Status: " + root.routing_state;
+                                    font-size: 12px;
+                                    color: #eed49f;
+                                }
+
+                                HorizontalLayout {
+                                    alignment: end;
+                                    Button {
+                                        text: "Enforce Policies Now";
+                                        clicked => { root.force_routing_refresh(); }
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle { vertical-stretch: 1; }
                     }
                 }
             }
@@ -374,6 +940,7 @@ async fn main() -> anyhow::Result<()> {
                             } else {
                                 "Disconnected".into()
                             });
+                            ui.set_headset_active(hs_active);
                             ui.set_headset_status(if hs_active {
                                 format!("Active ({})", hs_status).into()
                             } else {
@@ -414,6 +981,7 @@ async fn main() -> anyhow::Result<()> {
                         ui.set_speaker_volume((vol as f32 / 255.0) * 100.0);
                     }
                     if let Some(t) = telemetry {
+                        ui.set_headset_active(t.is_active);
                         ui.set_headset_status(if t.is_active {
                             "Active (Powered On)".into()
                         } else {
