@@ -7,7 +7,6 @@
 use crate::BackendError;
 use sonomux_core::{DevicesConfig, PoliciesConfig, RoutingConfig, StreamInfo};
 use std::ffi::c_void;
-use tracing::debug;
 
 #[repr(C)]
 struct Address {
@@ -24,6 +23,14 @@ extern "C" {
         qualifier_size: u32,
         qualifier: *const c_void,
         size: *mut u32,
+    ) -> i32;
+    fn AudioObjectSetPropertyData(
+        id: u32,
+        addr: *const Address,
+        qualifier_size: u32,
+        qualifier: *const c_void,
+        size: u32,
+        data: *const c_void,
     ) -> i32;
     fn AudioObjectGetPropertyData(
         id: u32,
@@ -46,23 +53,41 @@ extern "C" {
     fn proc_pidpath(pid: i32, buf: *mut c_void, size: u32) -> i32;
 }
 
+/// Set a plain-data property. Returns the OSStatus.
+pub(crate) fn set<T: Copy>(id: u32, selector: u32, scope: u32, value: &[T]) -> i32 {
+    unsafe {
+        AudioObjectSetPropertyData(
+            id,
+            &addr(selector, scope),
+            0,
+            std::ptr::null(),
+            std::mem::size_of_val(value) as u32,
+            value.as_ptr().cast(),
+        )
+    }
+}
+
 const fn fourcc(s: &[u8; 4]) -> u32 {
     u32::from_be_bytes(*s)
 }
 
 const SYSTEM_OBJECT: u32 = 1;
-const SCOPE_GLOBAL: u32 = fourcc(b"glob");
-const SCOPE_INPUT: u32 = fourcc(b"inpt");
-const SCOPE_OUTPUT: u32 = fourcc(b"outp");
+pub(crate) const SCOPE_GLOBAL: u32 = fourcc(b"glob");
+pub(crate) const SCOPE_INPUT: u32 = fourcc(b"inpt");
+pub(crate) const SCOPE_OUTPUT: u32 = fourcc(b"outp");
 const HW_DEVICES: u32 = fourcc(b"dev#");
 const HW_PROCESSES: u32 = fourcc(b"prs#");
 const OBJ_NAME: u32 = fourcc(b"lnam");
 const DEV_UID: u32 = fourcc(b"uid ");
 const DEV_STREAMS: u32 = fourcc(b"stm#");
+pub(crate) const DEV_PREFERRED_STEREO: u32 = fourcc(b"dch2");
 const PROC_PID: u32 = fourcc(b"ppid");
 const PROC_BUNDLE_ID: u32 = fourcc(b"pbid");
 const PROC_RUNNING_OUTPUT: u32 = fourcc(b"piro");
 const PROC_DEVICES: u32 = fourcc(b"pdv#");
+const HW_DEFAULT_OUTPUT: u32 = fourcc(b"dOut");
+const HW_DEFAULT_INPUT: u32 = fourcc(b"dIn ");
+const HW_DEFAULT_SYSTEM_OUTPUT: u32 = fourcc(b"sOut");
 const CF_UTF8: u32 = 0x0800_0100;
 
 fn addr(selector: u32, scope: u32) -> Address {
@@ -98,12 +123,37 @@ fn get_vec<T: Copy + Default>(id: u32, selector: u32, scope: u32) -> Option<Vec<
     (st == 0).then_some(out)
 }
 
-fn get<T: Copy + Default>(id: u32, selector: u32, scope: u32) -> Option<T> {
+pub(crate) fn get<T: Copy + Default>(id: u32, selector: u32, scope: u32) -> Option<T> {
     get_vec::<T>(id, selector, scope)?.first().copied()
 }
 
-fn get_string(id: u32, selector: u32) -> Option<String> {
-    let cf = get::<usize>(id, selector, SCOPE_GLOBAL)? as *const c_void;
+pub(crate) fn get_string(id: u32, selector: u32) -> Option<String> {
+    get_string_el(id, selector, SCOPE_GLOBAL, 0)
+}
+
+/// String property on a specific scope and element (e.g. a channel name).
+pub(crate) fn get_string_el(id: u32, selector: u32, scope: u32, element: u32) -> Option<String> {
+    let mut size = std::mem::size_of::<usize>() as u32;
+    let mut raw = 0usize;
+    let a = Address {
+        selector,
+        scope,
+        element,
+    };
+    let st = unsafe {
+        AudioObjectGetPropertyData(
+            id,
+            &a,
+            0,
+            std::ptr::null(),
+            &mut size,
+            (&mut raw as *mut usize).cast(),
+        )
+    };
+    if st != 0 {
+        return None;
+    }
+    let cf = raw as *const c_void;
     if cf.is_null() {
         return None;
     }
@@ -121,6 +171,16 @@ fn exe_path(pid: i32) -> Option<String> {
     let mut buf = [0u8; 4096];
     let n = unsafe { proc_pidpath(pid, buf.as_mut_ptr().cast(), buf.len() as u32) };
     (n > 0).then(|| String::from_utf8_lossy(&buf[..n as usize]).into_owned())
+}
+
+/// The app an executable belongs to: the outermost `.app` in its path, without the extension
+/// (".../Slack.app/.../Slack Helper.app/.../Slack Helper" -> "Slack"), else the file name.
+pub fn app_of_exe(exe: &str) -> String {
+    exe.split('/')
+        .find_map(|c| c.strip_suffix(".app"))
+        .or_else(|| exe.rsplit('/').next())
+        .unwrap_or_default()
+        .to_string()
 }
 
 /// A CoreAudio device as seen by the HAL.
@@ -162,6 +222,36 @@ impl CoreAudioManager {
             .collect()
     }
 
+    /// Every process the HAL knows has audio clients: (process object ID, PID, bundle ID).
+    pub fn audio_processes() -> Vec<(u32, i32, String)> {
+        get_vec::<u32>(SYSTEM_OBJECT, HW_PROCESSES, SCOPE_GLOBAL)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| {
+                (
+                    p,
+                    get::<i32>(p, PROC_PID, SCOPE_GLOBAL).unwrap_or(-1),
+                    get_string(p, PROC_BUNDLE_ID).unwrap_or_default(),
+                )
+            })
+            .collect()
+    }
+
+    /// The output device a process is playing to, if any.
+    pub fn process_output_device(process: u32) -> Option<Device> {
+        let id = get_vec::<u32>(process, PROC_DEVICES, SCOPE_OUTPUT)?
+            .first()
+            .copied()?;
+        Self::devices().into_iter().find(|d| d.id == id)
+    }
+
+    /// First channel (0-based) of a device's preferred output stereo pair.
+    pub fn preferred_stereo_first(device: u32) -> usize {
+        get_vec::<u32>(device, DEV_PREFERRED_STEREO, SCOPE_OUTPUT)
+            .and_then(|pair| pair.first().copied())
+            .map_or(0, |ch| ch.saturating_sub(1) as usize)
+    }
+
     pub async fn sink_exists(name: &str) -> bool {
         Self::devices()
             .iter()
@@ -182,21 +272,26 @@ impl CoreAudioManager {
     /// Processes currently playing audio, via the HAL process object list (macOS 14.2+).
     /// Returns an empty list on older systems.
     pub async fn get_active_streams() -> Result<Vec<StreamInfo>, BackendError> {
-        let devices = Self::devices();
-        let procs = get_vec::<u32>(SYSTEM_OBJECT, HW_PROCESSES, SCOPE_GLOBAL).unwrap_or_default();
-
-        Ok(procs
+        Ok(Self::all_streams()
             .into_iter()
-            .filter(|&p| get::<u32>(p, PROC_RUNNING_OUTPUT, SCOPE_GLOBAL).unwrap_or(0) != 0)
+            .filter(|s| !s.is_corked)
+            .collect())
+    }
+
+    /// Every process with an audio client, playing or not (`is_corked` = not playing now).
+    /// `index` is the HAL process object ID; `app_name` the bundle ID; `binary` the name of
+    /// the app the process belongs to (its outermost `.app`), so helpers group with their app.
+    pub fn all_streams() -> Vec<StreamInfo> {
+        let devices = Self::devices();
+        get_vec::<u32>(SYSTEM_OBJECT, HW_PROCESSES, SCOPE_GLOBAL)
+            .unwrap_or_default()
+            .into_iter()
             .map(|p| {
                 let pid = get::<i32>(p, PROC_PID, SCOPE_GLOBAL).filter(|&pid| pid > 0);
                 let exe = pid.and_then(exe_path);
-                let binary = exe
-                    .as_deref()
-                    .and_then(|e| e.rsplit('/').next())
-                    .unwrap_or_default()
-                    .to_string();
+                let binary = exe.as_deref().map(app_of_exe).unwrap_or_default();
                 let bundle = get_string(p, PROC_BUNDLE_ID).filter(|b| !b.is_empty());
+                let playing = get::<u32>(p, PROC_RUNNING_OUTPUT, SCOPE_GLOBAL).unwrap_or(0) != 0;
                 let sink = get_vec::<u32>(p, PROC_DEVICES, SCOPE_OUTPUT)
                     .and_then(|ids| ids.first().copied())
                     .and_then(|id| devices.iter().find(|d| d.id == id));
@@ -212,14 +307,48 @@ impl CoreAudioManager {
                     pid: pid.map(|p| p as u32),
                     cmdline: None,
                     exe_path: exe,
-                    is_corked: false,
+                    is_corked: !playing,
                     is_muted: false,
                 }
             })
-            .collect())
+            .collect()
     }
 
-    // ponytail: routing and loopbacks are stubs until process taps land (port step 4).
+    /// Current default output (or input) device.
+    pub fn default_device(input: bool) -> Option<Device> {
+        let sel = if input {
+            HW_DEFAULT_INPUT
+        } else {
+            HW_DEFAULT_OUTPUT
+        };
+        let id = get::<u32>(SYSTEM_OBJECT, sel, SCOPE_GLOBAL)?;
+        Self::devices().into_iter().find(|d| d.id == id)
+    }
+
+    /// Make the device matching `key` (name or UID) the default output (and system-sound
+    /// output) or input. Returns true if it changed anything.
+    pub fn set_default_device(key: &str, input: bool) -> bool {
+        let Some(dev) = Self::devices()
+            .into_iter()
+            .find(|d| d.matches(key) && if input { d.has_input } else { d.has_output })
+        else {
+            return false;
+        };
+        if Self::default_device(input).is_some_and(|d| d.id == dev.id) {
+            return false;
+        }
+        let sels: &[u32] = if input {
+            &[HW_DEFAULT_INPUT]
+        } else {
+            &[HW_DEFAULT_OUTPUT, HW_DEFAULT_SYSTEM_OUTPUT]
+        };
+        for &sel in sels {
+            set(SYSTEM_OBJECT, sel, SCOPE_GLOBAL, &[dev.id]);
+        }
+        true
+    }
+
+    // ponytail: loopback is a stub on macOS; apps move via taps, not stream moves.
 
     pub async fn ensure_loopback(
         _source: &str,
@@ -256,13 +385,13 @@ impl CoreAudioManager {
         Ok(())
     }
 
-    /// Returns 0 moves: per-app routing is not implemented on macOS yet.
+    /// Tap-and-route apps to their rule's channel (see `coreaudio_routing`).
+    /// Returns how many processes are routed.
     pub async fn enforce_stream_routing(
-        _routing_config: &RoutingConfig,
-        _devices: &DevicesConfig,
+        routing_config: &RoutingConfig,
+        devices: &DevicesConfig,
         _policies: &PoliciesConfig,
     ) -> Result<usize, BackendError> {
-        debug!("Stream routing skipped: not supported on macOS yet");
-        Ok(0)
+        Ok(crate::coreaudio_routing::sync(routing_config, devices))
     }
 }

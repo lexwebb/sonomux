@@ -17,9 +17,9 @@ fn test_default_config_values() {
     }
     #[cfg(target_os = "macos")]
     {
-        assert_eq!(cfg.devices.goxlr_chat_sink, "GoXLR Chat");
-        assert_eq!(cfg.devices.goxlr_music_sink, "GoXLR Music");
-        assert_eq!(cfg.devices.goxlr_mix_source, "GoXLR Sampler");
+        assert_eq!(cfg.devices.goxlr_chat_sink, "GoXLRMini Chat");
+        assert_eq!(cfg.devices.goxlr_music_sink, "GoXLRMini Music");
+        assert_eq!(cfg.devices.goxlr_mix_source, "GoXLRMini Sample Source Mix");
     }
     assert_eq!(cfg.policies.loopback_latency_ms, 20);
     assert!(cfg.policies.keep_off_surround.contains(&"Zen".to_string()));

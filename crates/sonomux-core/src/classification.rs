@@ -72,9 +72,18 @@ impl AppClassifier {
         let binary_clean = stream.binary.trim();
 
         // 1. Explicit user override from config.toml
+        // Keys match the binary or app name exactly, or a bundle-ID prefix on a dot boundary
+        // ("com.spotify.client" covers "com.spotify.client.helper").
+        let by_prefix = || {
+            overrides.iter().find_map(|(k, v)| {
+                let rest = app_name_clean.strip_prefix(k.as_str())?;
+                rest.starts_with('.').then_some(v)
+            })
+        };
         if let Some(target) = overrides
             .get(binary_clean)
             .or_else(|| overrides.get(app_name_clean))
+            .or_else(by_prefix)
         {
             if let Some(cat) = Self::parse_category_name(target) {
                 return cat;
@@ -369,6 +378,7 @@ impl AppClassifier {
             "slack-desktop",
             "teams",
             "teams-for-linux",
+            "microsoft teams",
             "skype",
             "skypeforlinux",
             "zoom",

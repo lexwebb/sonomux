@@ -84,6 +84,13 @@ pub struct DevicesConfig {
     pub goxlr_sample_sink: String,
     /// Number of consecutive matching reads before confirming headset state transition.
     pub debounce_count: usize,
+    /// macOS: also create devices for input pairs that have no matching output (e.g. GoXLR
+    /// "Broadcast Stream Mix"). Off by default: they also show in the Output list.
+    pub split_unpaired_inputs: bool,
+    /// macOS: keep the default output on this device (name or UID). None leaves it alone.
+    pub default_output: Option<String>,
+    /// macOS: keep the default input on this device (name or UID). None leaves it alone.
+    pub default_input: Option<String>,
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -106,26 +113,32 @@ impl Default for DevicesConfig {
             goxlr_sample_sink: "alsa_output.usb-TC-Helicon_GoXLRMini-00.HiFi__Line3__sink"
                 .to_string(),
             debounce_count: 2,
+            split_unpaired_inputs: false,
+            default_output: None,
+            default_input: None,
         }
     }
 }
 
 #[cfg(target_os = "macos")]
 impl Default for DevicesConfig {
-    /// CoreAudio device names (UIDs also work). The per-channel GoXLR devices come from
-    /// `dist/macos/goxlr-channels`, since GoXLR Utility's own aggregates fail on macOS 26.
+    /// CoreAudio device names (UIDs also work). sonomuxd creates a device per named stereo pair of
+    /// multichannel hardware, named "<device> <pair>" (see `sonomux_backend::coreaudio_channels`).
     fn default() -> Self {
         Self {
             goxlr_socket: "/tmp/goxlr.socket".to_string(),
             headset_name: "SteelSeries Arctis Nova 7".to_string(),
             headset_sink: "Arctis Nova 7".to_string(),
-            goxlr_mix_source: "GoXLR Sampler".to_string(),
-            goxlr_game_sink: "GoXLR Game".to_string(),
-            goxlr_system_sink: "GoXLR System".to_string(),
-            goxlr_chat_sink: "GoXLR Chat".to_string(),
-            goxlr_music_sink: "GoXLR Music".to_string(),
-            goxlr_sample_sink: "GoXLR Sample".to_string(),
+            goxlr_mix_source: "GoXLRMini Sample Source Mix".to_string(),
+            goxlr_game_sink: "GoXLRMini Game".to_string(),
+            goxlr_system_sink: "GoXLRMini System".to_string(),
+            goxlr_chat_sink: "GoXLRMini Chat".to_string(),
+            goxlr_music_sink: "GoXLRMini Music".to_string(),
+            goxlr_sample_sink: "GoXLRMini Sample Source Mix".to_string(),
             debounce_count: 2,
+            split_unpaired_inputs: false,
+            default_output: Some("GoXLRMini System".to_string()),
+            default_input: Some("GoXLRMini Chat".to_string()),
         }
     }
 }
