@@ -1,8 +1,13 @@
 //! Per-app routing on macOS via Core Audio process taps (macOS 14.2+).
 //!
-//! An `AppRoute` taps a set of processes (muting their normal output while tapped), wraps the
-//! tap and a hardware device in a private aggregate device, and copies the tapped stereo audio
-//! into one channel pair of that device from an IOProc.
+//! An `AppRoute` taps a set of processes on the hardware device they play to (muting their
+//! normal output while tapped), wraps the tap and the target hardware in a private aggregate
+//! device, and copies the tapped audio into one channel pair of the target from an IOProc.
+//!
+//! The tap reads the source device's stream at full width. An app writes to one stereo pair of
+//! it (e.g. 5/6 when it chose "GoXLRMini Chat"), so summing every left and every right channel
+//! recovers its audio at exact level whichever pair it used. (A stereo-mixdown tap would
+//! average all pairs instead, playing a 10-channel device's app at 1/5 volume.)
 //!
 //! The device must be a real device, not an aggregate (macOS can't nest aggregates), so for the
 //! GoXLR this targets "GoXLRMini" directly with a channel offset (System 0, Game 2, Chat 4, ...).
@@ -30,24 +35,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Shared with the real-time IOProc. Only atomics: no locks or allocation on the audio thread.
 struct RouteState {
-    /// First tap channel (0-based) of the source stereo pair.
-    source_first: usize,
     /// First output channel (0-based) of the target stereo pair.
     first_channel: usize,
     /// Frames copied, for diagnostics.
     frames: AtomicU64,
     /// Peak of the tapped signal since last read, as f32 bits.
     peak: AtomicU64,
-}
-
-/// Where to read an app's audio from.
-pub enum TapSource<'a> {
-    /// Stereo mixdown of everything the processes play. Averages all channels, so an app on a
-    /// multichannel device (e.g. 10-channel "GoXLR System") comes out quieter.
-    Mixdown,
-    /// The processes' audio on one device stream at full width, reading the stereo pair that
-    /// starts at `first` (0-based), e.g. the device's preferred stereo pair.
-    Device { uid: &'a str, first: usize },
 }
 
 /// A live tap-and-route. Dropping it restores the app's normal output.
@@ -91,9 +84,11 @@ pub(crate) fn dict(pairs: &[(&CStr, &AnyObject)]) -> Retained<NSDictionary<NSStr
 impl AppRoute {
     /// Tap `processes` (HAL process object IDs) and play them on `device_uid` starting at
     /// output channel `first_channel` (0-based).
+    /// Tap `processes` (HAL process object IDs) on hardware device `source_uid` and play them
+    /// on hardware device `device_uid` starting at output channel `first_channel` (0-based).
     pub fn start(
         processes: &[AudioObjectID],
-        source: TapSource,
+        source_uid: &str,
         device_uid: &str,
         first_channel: usize,
     ) -> Result<Self, BackendError> {
@@ -104,25 +99,13 @@ impl AppRoute {
         // 1. Tap: stereo mixdown of the processes, silenced at their normal output while tapped.
         let ids: Vec<Retained<NSNumber>> =
             processes.iter().map(|&p| NSNumber::new_u32(p)).collect();
-        let ids = NSArray::from_retained_slice(&ids);
-        let (desc, source_first) = match source {
-            TapSource::Mixdown => (
-                unsafe {
-                    CATapDescription::initStereoMixdownOfProcesses(CATapDescription::alloc(), &ids)
-                },
+        let desc = unsafe {
+            CATapDescription::initWithProcesses_andDeviceUID_withStream(
+                CATapDescription::alloc(),
+                &NSArray::from_retained_slice(&ids),
+                &NSString::from_str(source_uid),
                 0,
-            ),
-            TapSource::Device { uid, first } => (
-                unsafe {
-                    CATapDescription::initWithProcesses_andDeviceUID_withStream(
-                        CATapDescription::alloc(),
-                        &ids,
-                        &NSString::from_str(uid),
-                        0,
-                    )
-                },
-                first,
-            ),
+            )
         };
         unsafe {
             desc.setPrivate(true);
@@ -169,7 +152,6 @@ impl AppRoute {
 
         // 3. IOProc copying tap input to the target channel pair.
         let state = Box::into_raw(Box::new(RouteState {
-            source_first,
             first_channel,
             frames: AtomicU64::new(0),
             peak: AtomicU64::new(0),
@@ -276,11 +258,16 @@ unsafe extern "C-unwind" fn io_proc(
                 continue;
             }
             let col = target - channel_base;
-            let src_col = (st.source_first + side).min(tap_ch - 1);
             for f in 0..frames.min(tap_frames) {
-                let s = tap_data[f * tap_ch + src_col];
-                out[f * ch + col] = s;
-                peak = peak.max(s.abs());
+                let row = &tap_data[f * tap_ch..(f + 1) * tap_ch];
+                // Mono tap: same sample both sides. Otherwise sum this side of every pair.
+                let v: f32 = if tap_ch == 1 {
+                    row[0]
+                } else {
+                    row.iter().skip(side).step_by(2).sum()
+                };
+                out[f * ch + col] = v;
+                peak = peak.max(v.abs());
             }
         }
         channel_base += ch;

@@ -197,6 +197,18 @@ async fn main() -> anyhow::Result<()> {
                 sonomux_backend::coreaudio_channels::ensure_split_devices(
                     current_cfg.devices.split_unpaired_inputs,
                 );
+                // Keep the default devices where the config says (what FineTune's lock did).
+                #[cfg(target_os = "macos")]
+                for (key, input) in [
+                    (&current_cfg.devices.default_output, false),
+                    (&current_cfg.devices.default_input, true),
+                ] {
+                    if let Some(k) = key {
+                        if sonomux_backend::coreaudio::CoreAudioManager::set_default_device(k, input) {
+                            info!("Default {} set to '{}'", if input { "input" } else { "output" }, k);
+                        }
+                    }
+                }
 
                 let goxlr_up = goxlr.status().await == DeviceStatus::Active
                     && Backend::source_exists(&current_cfg.devices.goxlr_mix_source).await;

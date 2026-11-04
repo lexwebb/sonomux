@@ -5,6 +5,8 @@ pub mod coreaudio;
 #[cfg(target_os = "macos")]
 pub mod coreaudio_channels;
 #[cfg(target_os = "macos")]
+pub mod coreaudio_routing;
+#[cfg(target_os = "macos")]
 pub mod coreaudio_tap;
 pub mod pulse;
 

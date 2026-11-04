@@ -87,6 +87,10 @@ pub struct DevicesConfig {
     /// macOS: also create devices for input pairs that have no matching output (e.g. GoXLR
     /// "Broadcast Stream Mix"). Off by default: they also show in the Output list.
     pub split_unpaired_inputs: bool,
+    /// macOS: keep the default output on this device (name or UID). None leaves it alone.
+    pub default_output: Option<String>,
+    /// macOS: keep the default input on this device (name or UID). None leaves it alone.
+    pub default_input: Option<String>,
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -110,6 +114,8 @@ impl Default for DevicesConfig {
                 .to_string(),
             debounce_count: 2,
             split_unpaired_inputs: false,
+            default_output: None,
+            default_input: None,
         }
     }
 }
@@ -131,6 +137,8 @@ impl Default for DevicesConfig {
             goxlr_sample_sink: "GoXLRMini Sample Source Mix".to_string(),
             debounce_count: 2,
             split_unpaired_inputs: false,
+            default_output: Some("GoXLRMini System".to_string()),
+            default_input: Some("GoXLRMini Chat".to_string()),
         }
     }
 }
