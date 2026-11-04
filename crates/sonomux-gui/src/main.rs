@@ -1,4 +1,5 @@
 use slint::slint;
+use std::sync::Arc;
 use std::time::Duration;
 use tracing::info;
 use zbus::proxy;
@@ -159,10 +160,9 @@ slint! {
             HorizontalLayout {
                 alignment: center;
                 ConsoleFader {
-                    value: root.volume;
+                    value <=> root.volume;
                     is_muted: root.muted;
                     changed(val) => {
-                        root.volume = val;
                         root.volume_changed(val);
                     }
                 }
@@ -445,10 +445,9 @@ slint! {
                             MixerStrip {
                                 title: "SYSTEM";
                                 subtitle: "CH 1-2";
-                                volume: root.system_volume;
+                                volume <=> root.system_volume;
                                 muted: false;
                                 volume_changed(v) => {
-                                    root.system_volume = v;
                                     root.channel_volume_changed("System", v);
                                 }
                                 toggle_mute() => {}
@@ -457,10 +456,9 @@ slint! {
                             MixerStrip {
                                 title: "GAME";
                                 subtitle: "VSM 7.1";
-                                volume: root.game_volume;
+                                volume <=> root.game_volume;
                                 muted: false;
                                 volume_changed(v) => {
-                                    root.game_volume = v;
                                     root.channel_volume_changed("Game", v);
                                 }
                                 toggle_mute() => {}
@@ -469,10 +467,9 @@ slint! {
                             MixerStrip {
                                 title: "CHAT";
                                 subtitle: "VOIP";
-                                volume: root.chat_volume;
+                                volume <=> root.chat_volume;
                                 muted: false;
                                 volume_changed(v) => {
-                                    root.chat_volume = v;
                                     root.channel_volume_changed("Chat", v);
                                 }
                                 toggle_mute() => {}
@@ -481,10 +478,9 @@ slint! {
                             MixerStrip {
                                 title: "MUSIC";
                                 subtitle: "MEDIA";
-                                volume: root.music_volume;
+                                volume <=> root.music_volume;
                                 muted: false;
                                 volume_changed(v) => {
-                                    root.music_volume = v;
                                     root.channel_volume_changed("Music", v);
                                 }
                                 toggle_mute() => {}
@@ -494,10 +490,9 @@ slint! {
                                 title: "SPEAKERS";
                                 subtitle: "LINE OUT";
                                 is_output: true;
-                                volume: root.speaker_volume;
+                                volume <=> root.speaker_volume;
                                 muted: root.speaker_volume <= 0.0;
                                 volume_changed(v) => {
-                                    root.speaker_volume = v;
                                     root.channel_volume_changed("Headphones", v);
                                     root.volume_changed(v);
                                 }
@@ -510,9 +505,9 @@ slint! {
                                 title: "NOVA 7";
                                 subtitle: "WIRELESS";
                                 is_output: true;
-                                volume: root.headset_volume;
+                                volume <=> root.headset_volume;
                                 muted: !root.headset_active;
-                                volume_changed(v) => { root.headset_volume = v; }
+                                volume_changed(v) => {}
                                 toggle_mute() => {}
                             }
                         }
@@ -930,15 +925,72 @@ async fn main() -> anyhow::Result<()> {
         main_window.set_daemon_color(slint::Color::from_rgb_u8(165, 173, 203));
     }
 
+    // State synchronization tracking & batching
+    let last_user_touch = Arc::new(std::sync::Mutex::new(
+        std::collections::HashMap::<String, std::time::Instant>::new(),
+    ));
+    let pending_volumes = Arc::new(std::sync::Mutex::new(
+        std::collections::HashMap::<String, f64>::new(),
+    ));
+    let notify_volume = Arc::new(tokio::sync::Notify::new());
+
+    // Worker that batches & serializes digital slider updates to D-Bus / GoXLR
+    let worker_proxy = dbus_proxy.clone();
+    let worker_goxlr = goxlr.clone();
+    let worker_pending = Arc::clone(&pending_volumes);
+    let worker_notify = Arc::clone(&notify_volume);
+    tokio::spawn(async move {
+        loop {
+            worker_notify.notified().await;
+            tokio::time::sleep(Duration::from_millis(15)).await;
+
+            let batch: Vec<(String, f64)> = {
+                let mut map = worker_pending.lock().unwrap();
+                map.drain().collect()
+            };
+
+            for (ch_str, val) in batch {
+                if let Some(ref p) = worker_proxy {
+                    if p.set_channel_volume(ch_str.clone(), val).await.is_ok() {
+                        continue;
+                    }
+                }
+                let raw = ((val / 100.0).clamp(0.0, 1.0) * 255.0).round() as u8;
+                let ch = match ch_str.as_str() {
+                    "System" => sonomux_device_goxlr::Channel::System,
+                    "Game" => sonomux_device_goxlr::Channel::Game,
+                    "Chat" => sonomux_device_goxlr::Channel::Chat,
+                    "Music" => sonomux_device_goxlr::Channel::Music,
+                    "Headphones" | "Speakers" => sonomux_device_goxlr::Channel::Headphones,
+                    "Mic" => sonomux_device_goxlr::Channel::Mic,
+                    "LineIn" => sonomux_device_goxlr::Channel::LineIn,
+                    "LineOut" => sonomux_device_goxlr::Channel::LineOut,
+                    _ => continue,
+                };
+                let _ = worker_goxlr.set_volume_raw(ch, raw).await;
+            }
+        }
+    });
+
     // Spawn periodic state polling (either through D-Bus or direct hardware)
     let handle = main_window.as_weak();
     let proxy_for_poll = dbus_proxy.clone();
     let goxlr_for_poll = goxlr.clone();
+    let touch_for_poll = Arc::clone(&last_user_touch);
 
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_millis(100));
+        let mut interval = tokio::time::interval(Duration::from_millis(50));
         loop {
             interval.tick().await;
+
+            let now = std::time::Instant::now();
+            let recent_channels: std::collections::HashSet<String> = {
+                let map = touch_for_poll.lock().unwrap();
+                map.iter()
+                    .filter(|(_, &t)| now.duration_since(t).as_millis() < 350)
+                    .map(|(k, _)| k.clone())
+                    .collect()
+            };
 
             if let Some(ref proxy) = proxy_for_poll {
                 if let Ok((goxlr_up, _hs_status, hs_active, battery, spk_vol, loop_up)) =
@@ -946,6 +998,7 @@ async fn main() -> anyhow::Result<()> {
                 {
                     let ch_vols = proxy.get_channel_volumes().await.ok();
                     let weak = handle.clone();
+                    let recent = recent_channels.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(ui) = weak.upgrade() {
                             ui.set_daemon_status("ONLINE".into());
@@ -968,19 +1021,29 @@ async fn main() -> anyhow::Result<()> {
                             } else {
                                 "--".into()
                             });
-                            ui.set_speaker_volume(spk_vol as f32);
+                            if !recent.contains("Headphones") {
+                                ui.set_speaker_volume(spk_vol as f32);
+                            }
                             if let Some(ref map) = ch_vols {
-                                if let Some(&v) = map.get("System") {
-                                    ui.set_system_volume(v as f32);
+                                if !recent.contains("System") {
+                                    if let Some(&v) = map.get("System") {
+                                        ui.set_system_volume(v as f32);
+                                    }
                                 }
-                                if let Some(&v) = map.get("Game") {
-                                    ui.set_game_volume(v as f32);
+                                if !recent.contains("Game") {
+                                    if let Some(&v) = map.get("Game") {
+                                        ui.set_game_volume(v as f32);
+                                    }
                                 }
-                                if let Some(&v) = map.get("Chat") {
-                                    ui.set_chat_volume(v as f32);
+                                if !recent.contains("Chat") {
+                                    if let Some(&v) = map.get("Chat") {
+                                        ui.set_chat_volume(v as f32);
+                                    }
                                 }
-                                if let Some(&v) = map.get("Music") {
-                                    ui.set_music_volume(v as f32);
+                                if !recent.contains("Music") {
+                                    if let Some(&v) = map.get("Music") {
+                                        ui.set_music_volume(v as f32);
+                                    }
                                 }
                             }
                             ui.set_routing_state(if loop_up {
@@ -1001,26 +1064,37 @@ async fn main() -> anyhow::Result<()> {
             let telemetry = sonomux_device_headset::HeadsetMonitor::probe_raw()
                 .await
                 .ok();
+            let recent = recent_channels;
 
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = weak.upgrade() {
                     ui.set_daemon_status("STANDALONE".into());
                     ui.set_daemon_color(slint::Color::from_rgb_u8(138, 144, 160));
                     if let Some(ref vols) = all_vols {
-                        if let Some(&vol) = vols.get("Headphones") {
-                            ui.set_speaker_volume((vol as f32 / 255.0) * 100.0);
+                        if !recent.contains("Headphones") {
+                            if let Some(&vol) = vols.get("Headphones") {
+                                ui.set_speaker_volume((vol as f32 / 255.0) * 100.0);
+                            }
                         }
-                        if let Some(&vol) = vols.get("System") {
-                            ui.set_system_volume((vol as f32 / 255.0) * 100.0);
+                        if !recent.contains("System") {
+                            if let Some(&vol) = vols.get("System") {
+                                ui.set_system_volume((vol as f32 / 255.0) * 100.0);
+                            }
                         }
-                        if let Some(&vol) = vols.get("Game") {
-                            ui.set_game_volume((vol as f32 / 255.0) * 100.0);
+                        if !recent.contains("Game") {
+                            if let Some(&vol) = vols.get("Game") {
+                                ui.set_game_volume((vol as f32 / 255.0) * 100.0);
+                            }
                         }
-                        if let Some(&vol) = vols.get("Chat") {
-                            ui.set_chat_volume((vol as f32 / 255.0) * 100.0);
+                        if !recent.contains("Chat") {
+                            if let Some(&vol) = vols.get("Chat") {
+                                ui.set_chat_volume((vol as f32 / 255.0) * 100.0);
+                            }
                         }
-                        if let Some(&vol) = vols.get("Music") {
-                            ui.set_music_volume((vol as f32 / 255.0) * 100.0);
+                        if !recent.contains("Music") {
+                            if let Some(&vol) = vols.get("Music") {
+                                ui.set_music_volume((vol as f32 / 255.0) * 100.0);
+                            }
                         }
                     }
                     if let Some(t) = telemetry {
@@ -1044,50 +1118,32 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // Callbacks
-    let proxy_for_vol = dbus_proxy.clone();
-    let goxlr_for_vol = goxlr.clone();
+    let touch_for_vol = Arc::clone(&last_user_touch);
+    let pending_for_vol = Arc::clone(&pending_volumes);
+    let notify_for_vol = Arc::clone(&notify_volume);
     main_window.on_volume_changed(move |val| {
-        let proxy = proxy_for_vol.clone();
-        let client = goxlr_for_vol.clone();
-        tokio::spawn(async move {
-            if let Some(ref p) = proxy {
-                if p.set_speaker_volume(val as f64).await.is_ok() {
-                    return;
-                }
-            }
-            let raw = ((val / 100.0).clamp(0.0, 1.0) * 255.0).round() as u8;
-            let _ = client
-                .set_volume_raw(sonomux_device_goxlr::Channel::Headphones, raw)
-                .await;
-        });
+        let ch_str = "Headphones".to_string();
+        {
+            let mut touches = touch_for_vol.lock().unwrap();
+            touches.insert(ch_str.clone(), std::time::Instant::now());
+            let mut pending = pending_for_vol.lock().unwrap();
+            pending.insert(ch_str, val as f64);
+        }
+        notify_for_vol.notify_one();
     });
 
-    let proxy_for_ch_vol = dbus_proxy.clone();
-    let goxlr_for_ch_vol = goxlr.clone();
+    let touch_for_ch_vol = Arc::clone(&last_user_touch);
+    let pending_for_ch_vol = Arc::clone(&pending_volumes);
+    let notify_for_ch_vol = Arc::clone(&notify_volume);
     main_window.on_channel_volume_changed(move |channel, val| {
-        let proxy = proxy_for_ch_vol.clone();
-        let client = goxlr_for_ch_vol.clone();
         let ch_str = channel.to_string();
-        tokio::spawn(async move {
-            if let Some(ref p) = proxy {
-                if p.set_channel_volume(ch_str.clone(), val as f64).await.is_ok() {
-                    return;
-                }
-            }
-            let raw = ((val / 100.0).clamp(0.0, 1.0) * 255.0).round() as u8;
-            let ch = match ch_str.as_str() {
-                "System" => sonomux_device_goxlr::Channel::System,
-                "Game" => sonomux_device_goxlr::Channel::Game,
-                "Chat" => sonomux_device_goxlr::Channel::Chat,
-                "Music" => sonomux_device_goxlr::Channel::Music,
-                "Headphones" | "Speakers" => sonomux_device_goxlr::Channel::Headphones,
-                "Mic" => sonomux_device_goxlr::Channel::Mic,
-                "LineIn" => sonomux_device_goxlr::Channel::LineIn,
-                "LineOut" => sonomux_device_goxlr::Channel::LineOut,
-                _ => return,
-            };
-            let _ = client.set_volume_raw(ch, raw).await;
-        });
+        {
+            let mut touches = touch_for_ch_vol.lock().unwrap();
+            touches.insert(ch_str.clone(), std::time::Instant::now());
+            let mut pending = pending_for_ch_vol.lock().unwrap();
+            pending.insert(ch_str, val as f64);
+        }
+        notify_for_ch_vol.notify_one();
     });
 
     let proxy_for_mute = dbus_proxy.clone();
