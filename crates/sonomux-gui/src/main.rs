@@ -1025,8 +1025,11 @@ trait SonomuxDaemon {
     async fn set_speaker_volume(&self, volume: f64) -> zbus::Result<()>;
     async fn toggle_speaker_mute(&self) -> zbus::Result<bool>;
     async fn enforce_policies(&self) -> zbus::Result<()>;
+    #[allow(clippy::type_complexity)] // tuple mirrors the daemon's D-Bus signature
     async fn get_routed_streams(&self) -> zbus::Result<Vec<(u64, String, String, String, String)>>;
-    async fn get_routing_config(&self) -> zbus::Result<(bool, std::collections::HashMap<String, String>)>;
+    async fn get_routing_config(
+        &self,
+    ) -> zbus::Result<(bool, std::collections::HashMap<String, String>)>;
     async fn set_routing_enabled(&self, enabled: bool) -> zbus::Result<()>;
     async fn set_category_target(&self, category: String, target: String) -> zbus::Result<()>;
     async fn get_rules(&self) -> zbus::Result<Vec<(String, bool)>>;
@@ -1039,9 +1042,15 @@ pub fn find_existing_hyprland_address(clients_json: &str) -> Option<String> {
     let array = clients.as_array()?;
     for client in array {
         let title = client.get("title").and_then(|v| v.as_str()).unwrap_or("");
-        let init_title = client.get("initialTitle").and_then(|v| v.as_str()).unwrap_or("");
+        let init_title = client
+            .get("initialTitle")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         let class = client.get("class").and_then(|v| v.as_str()).unwrap_or("");
-        let init_class = client.get("initialClass").and_then(|v| v.as_str()).unwrap_or("");
+        let init_class = client
+            .get("initialClass")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
 
         if title == "Sonomux Audio Coordinator"
             || init_title == "Sonomux Audio Coordinator"
@@ -1088,7 +1097,10 @@ pub fn try_focus_existing_instance() -> bool {
             if output.status.success() {
                 if let Ok(json_str) = String::from_utf8(output.stdout) {
                     if let Some(addr) = find_existing_hyprland_address(&json_str) {
-                        info!("Found existing Sonomux window in Hyprland at {}, focusing...", addr);
+                        info!(
+                            "Found existing Sonomux window in Hyprland at {}, focusing...",
+                            addr
+                        );
                         // Try modern Lua dispatch first (Hyprland >= 0.56)
                         let lua_cmd = format!("hl.dsp.focus({{ window = \"address:{}\" }})", addr);
                         let status = std::process::Command::new("hyprctl")
@@ -1114,7 +1126,12 @@ pub fn try_focus_existing_instance() -> bool {
 
     // 2. Generic X11 / xdotool fallback
     if let Ok(status) = std::process::Command::new("xdotool")
-        .args(["search", "--name", "Sonomux Audio Coordinator", "windowactivate"])
+        .args([
+            "search",
+            "--name",
+            "Sonomux Audio Coordinator",
+            "windowactivate",
+        ])
         .status()
     {
         if status.success() {
@@ -1193,20 +1210,26 @@ async fn main() -> anyhow::Result<()> {
         }
         for rule in &cfg.rules {
             match rule.name.as_str() {
-                "Auto Headset Switcher" => main_window.set_rule_headset_switcher_enabled(rule.enabled),
-                "Browser Stream Isolation" => main_window.set_rule_surround_isolation_enabled(rule.enabled),
+                "Auto Headset Switcher" => {
+                    main_window.set_rule_headset_switcher_enabled(rule.enabled)
+                }
+                "Browser Stream Isolation" => {
+                    main_window.set_rule_surround_isolation_enabled(rule.enabled)
+                }
                 _ => {}
             }
         }
     }
 
     // State synchronization tracking & batching
-    let last_user_touch = Arc::new(std::sync::Mutex::new(
-        std::collections::HashMap::<String, std::time::Instant>::new(),
-    ));
-    let pending_volumes = Arc::new(std::sync::Mutex::new(
-        std::collections::HashMap::<String, f64>::new(),
-    ));
+    let last_user_touch = Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
+        String,
+        std::time::Instant,
+    >::new()));
+    let pending_volumes = Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
+        String,
+        f64,
+    >::new()));
     let notify_volume = Arc::new(tokio::sync::Notify::new());
 
     // Worker that batches & serializes digital slider updates to D-Bus / GoXLR
@@ -1509,7 +1532,12 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
             if let Ok((cfg, _)) = sonomux_core::AppConfig::load_or_create() {
-                let keep_off: Vec<&str> = cfg.policies.keep_off_surround.iter().map(|s| s.as_str()).collect();
+                let keep_off: Vec<&str> = cfg
+                    .policies
+                    .keep_off_surround
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect();
                 let _ = sonomux_backend::Backend::enforce_surround_policies(
                     &cfg.policies.surround_out_node,
                     &cfg.policies.surround_in_node,
@@ -1640,8 +1668,12 @@ async fn main() -> anyhow::Result<()> {
                             if let Some(rule_list) = rules {
                                 for (name, rule_enabled) in rule_list {
                                     match name.as_str() {
-                                        "Auto Headset Switcher" => ui.set_rule_headset_switcher_enabled(rule_enabled),
-                                        "Browser Stream Isolation" => ui.set_rule_surround_isolation_enabled(rule_enabled),
+                                        "Auto Headset Switcher" => {
+                                            ui.set_rule_headset_switcher_enabled(rule_enabled)
+                                        }
+                                        "Browser Stream Isolation" => {
+                                            ui.set_rule_surround_isolation_enabled(rule_enabled)
+                                        }
                                         _ => {}
                                     }
                                 }

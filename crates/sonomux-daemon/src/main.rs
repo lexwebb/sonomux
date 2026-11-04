@@ -114,7 +114,8 @@ async fn main() -> anyhow::Result<()> {
     let mut fader_ticker = tokio::time::interval(Duration::from_millis(50));
 
     #[cfg(unix)]
-    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok();
+    let mut sigterm =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok();
 
     loop {
         tokio::select! {

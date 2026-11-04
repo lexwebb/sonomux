@@ -35,7 +35,7 @@ while IFS= read -r bin; do
     TEST_BINS+=("$bin")
     LLVM_PROFILE_FILE="${COVERAGE_DIR}/test-%p-%m.profraw" "$bin" --quiet >/dev/null 2>&1 || true
   fi
-done < <(find target/debug/deps -maxdepth 1 -type f -perm /111 \( -name "*test*" -o -name "sonomux_*" \) -not -name "*.so")
+done < <(find target/debug/deps -maxdepth 1 -type f -perm -u=x \( -name "*test*" -o -name "sonomux_*" \) -not -name "*.so")
 
 echo "📊 Merging profile data..."
 llvm-profdata merge -sparse "${COVERAGE_DIR}"/*.profraw -o "${COVERAGE_DIR}/sonomux.profdata"
@@ -89,8 +89,11 @@ echo "${STATUS_MSG}"
 # Update README.md badge
 README_FILE="${ROOT_DIR}/README.md"
 if [ -f "${README_FILE}" ]; then
-  sed -i -E "s|https://img.shields.io/badge/Coverage-[0-9]+%25-[a-z]+.svg|https://img.shields.io/badge/Coverage-${ROUNDED_PCT}%25-${COLOR}.svg|g" "${README_FILE}"
-  sed -i -E "s|Coverage: [0-9]+%|Coverage: ${ROUNDED_PCT}%|g" "${README_FILE}"
+  # -i.bak works with both GNU and BSD (macOS) sed.
+  sed -i.bak -E \
+    -e "s|https://img.shields.io/badge/Coverage-[0-9]+%25-[a-z]+.svg|https://img.shields.io/badge/Coverage-${ROUNDED_PCT}%25-${COLOR}.svg|g" \
+    -e "s|Coverage: [0-9]+%|Coverage: ${ROUNDED_PCT}%|g" "${README_FILE}"
+  rm -f "${README_FILE}.bak"
   echo "📝 Synchronized README.md badge -> ${ROUNDED_PCT}% (${COLOR})"
 fi
 
