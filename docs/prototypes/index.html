@@ -1,0 +1,1233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sonomux UI Prototypes — Interactive Showcase</title>
+  <style>
+    :root {
+      --bg-base: #181926;
+      --bg-mantle: #1e2030;
+      --bg-surface: #24273a;
+      --bg-surface-elevated: #363a4f;
+      --border: #494d64;
+      --text: #cad3f5;
+      --text-sub: #a5adcb;
+      --text-muted: #6e738d;
+      --accent-blue: #8aadf4;
+      --accent-mauve: #c6a0f6;
+      --accent-green: #a6da95;
+      --accent-red: #ed8796;
+      --accent-yellow: #eed49f;
+      --accent-peach: #f5a97f;
+      --accent-cyan: #8bd5ca;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+
+    body {
+      background-color: var(--bg-base);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+      user-select: none;
+    }
+
+    /* Top Control & Prototype Switcher Bar */
+    header {
+      background-color: var(--bg-mantle);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-shrink: 0;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand h1 {
+      font-size: 1.15rem;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .brand .badge {
+      font-size: 0.72rem;
+      background: var(--bg-surface-elevated);
+      color: var(--accent-cyan);
+      padding: 2px 8px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      font-weight: 600;
+    }
+
+    /* Prototype Tabs */
+    .view-switcher {
+      display: flex;
+      background: var(--bg-surface);
+      border-radius: 8px;
+      padding: 3px;
+      gap: 3px;
+      border: 1px solid var(--border);
+    }
+
+    .tab-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-sub);
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .tab-btn:hover {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .tab-btn.active {
+      background: var(--accent-blue);
+      color: #181926;
+      font-weight: 700;
+    }
+
+    /* Simulation Toolbar */
+    .sim-bar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .sim-btn {
+      background: var(--bg-surface-elevated);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s;
+    }
+
+    .sim-btn:hover {
+      background: var(--border);
+    }
+
+    .sim-btn.active {
+      background: var(--accent-green);
+      color: #181926;
+      border-color: var(--accent-green);
+    }
+
+    .status-pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.75rem;
+      background: var(--bg-surface);
+      padding: 4px 10px;
+      border-radius: 20px;
+      border: 1px solid var(--border);
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent-green);
+    }
+
+    /* Main Container */
+    main {
+      flex: 1;
+      overflow: auto;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
+
+    .prototype-pane {
+      display: none;
+      width: 100%;
+      height: 100%;
+      animation: fadeIn 0.2s ease-in-out;
+    }
+
+    .prototype-pane.active {
+      display: flex;
+      flex-direction: column;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ==========================================================================
+       OPTION 1: THE STUDIO DECK
+       ========================================================================== */
+    .deck-container {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      max-width: 980px;
+      margin: 0 auto;
+      width: 100%;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+    }
+
+    .deck-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .deck-header h2 {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: var(--accent-mauve);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .deck-meta {
+      display: flex;
+      gap: 16px;
+      font-size: 0.8rem;
+    }
+
+    .channel-strips {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 14px;
+      flex: 1;
+      min-height: 420px;
+    }
+
+    .strip {
+      background: var(--bg-mantle);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 10px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      position: relative;
+      transition: border-color 0.2s;
+    }
+
+    .strip.highlight {
+      border-color: var(--accent-mauve);
+    }
+
+    .strip.output-sink {
+      background: rgba(30, 32, 48, 0.9);
+      border: 1px dashed var(--border);
+    }
+
+    .strip-tag {
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      font-weight: 800;
+      letter-spacing: 0.8px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: var(--bg-surface-elevated);
+      color: var(--text-sub);
+    }
+
+    .strip-name {
+      font-size: 0.88rem;
+      font-weight: 700;
+      text-align: center;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 100%;
+    }
+
+    .meter-and-fader {
+      display: flex;
+      gap: 10px;
+      flex: 1;
+      align-items: center;
+      justify-content: center;
+      padding: 10px 0;
+      width: 100%;
+    }
+
+    /* Dual peak meter */
+    .vu-meter {
+      width: 8px;
+      height: 220px;
+      background: #11121d;
+      border-radius: 4px;
+      overflow: hidden;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .vu-level {
+      width: 100%;
+      background: linear-gradient(to top, var(--accent-green) 0%, var(--accent-yellow) 75%, var(--accent-red) 95%);
+      transition: height 0.08s ease-out;
+    }
+
+    /* Custom Vertical Slider */
+    .fader-track {
+      height: 220px;
+      display: flex;
+      align-items: center;
+      position: relative;
+    }
+
+    .fader-track input[type="range"] {
+      writing-mode: bt-lr; /* IE */
+      -webkit-appearance: slider-vertical;
+      appearance: slider-vertical;
+      width: 28px;
+      height: 210px;
+      cursor: pointer;
+      accent-color: var(--accent-blue);
+    }
+
+    .fader-val {
+      font-family: monospace;
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: var(--accent-yellow);
+    }
+
+    .mute-btn {
+      width: 100%;
+      padding: 8px 4px;
+      background: var(--bg-surface-elevated);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 0.75rem;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      transition: all 0.15s ease;
+    }
+
+    .mute-btn:hover {
+      background: var(--border);
+    }
+
+    .mute-btn.muted {
+      background: var(--accent-red);
+      color: #181926;
+      border-color: var(--accent-red);
+      box-shadow: 0 0 10px rgba(237, 135, 150, 0.4);
+    }
+
+    .deck-footer {
+      margin-top: 16px;
+      background: var(--bg-mantle);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.78rem;
+      color: var(--text-sub);
+    }
+
+    .rule-pill {
+      background: rgba(166, 218, 149, 0.15);
+      color: var(--accent-green);
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-weight: 600;
+      border: 1px solid rgba(166, 218, 149, 0.3);
+    }
+
+    /* ==========================================================================
+       OPTION 2: THE FLOW GRAPH
+       ========================================================================== */
+    .flow-container {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      max-width: 1050px;
+      margin: 0 auto;
+      width: 100%;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+    }
+
+    .flow-canvas {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 240px 1fr 260px;
+      gap: 30px;
+      align-items: center;
+      position: relative;
+    }
+
+    .flow-col {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      z-index: 2;
+    }
+
+    .flow-col h3 {
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+      text-align: center;
+    }
+
+    .node-card {
+      background: var(--bg-mantle);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+      transition: all 0.2s ease;
+      position: relative;
+    }
+
+    .node-card:hover {
+      border-color: var(--accent-blue);
+      transform: translateY(-2px);
+    }
+
+    .node-card.active-stream {
+      border-left: 4px solid var(--accent-green);
+    }
+
+    .node-card.muted-sink {
+      border-left: 4px solid var(--accent-red);
+      opacity: 0.6;
+    }
+
+    .node-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .node-title {
+      font-size: 0.9rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .node-sub {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    /* Center Routing Engine Node */
+    .engine-hub {
+      background: linear-gradient(145deg, var(--bg-mantle), var(--bg-surface-elevated));
+      border: 2px solid var(--accent-mauve);
+      border-radius: 16px;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      gap: 12px;
+      position: relative;
+      box-shadow: 0 0 25px rgba(198, 160, 246, 0.15);
+    }
+
+    .engine-hub h4 {
+      color: var(--accent-mauve);
+      font-size: 1.05rem;
+      font-weight: 800;
+    }
+
+    .engine-rule-badge {
+      background: var(--bg-base);
+      border: 1px solid var(--border);
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 0.75rem;
+      text-align: left;
+      width: 100%;
+    }
+
+    .flow-line-svg {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    /* ==========================================================================
+       OPTION 3: THE COMMAND STUDIO
+       ========================================================================== */
+    .studio-container {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      display: grid;
+      grid-template-columns: 200px 1fr;
+      height: 100%;
+      max-width: 1050px;
+      margin: 0 auto;
+      width: 100%;
+      overflow: hidden;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+    }
+
+    .studio-sidebar {
+      background: var(--bg-mantle);
+      border-right: 1px solid var(--border);
+      padding: 16px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .sidebar-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 12px;
+      border-radius: 6px;
+      color: var(--text-sub);
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .sidebar-item:hover {
+      background: var(--bg-surface);
+      color: var(--text);
+    }
+
+    .sidebar-item.active {
+      background: var(--bg-surface-elevated);
+      color: var(--accent-blue);
+      font-weight: 700;
+    }
+
+    .studio-content {
+      padding: 24px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .studio-card-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    .studio-card {
+      background: var(--bg-mantle);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .rule-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 42px;
+      height: 22px;
+    }
+
+    .switch input { opacity: 0; width: 0; height: 0; }
+
+    .slider-toggle {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-color: var(--border);
+      transition: .2s;
+      border-radius: 24px;
+    }
+
+    .slider-toggle:before {
+      position: absolute;
+      content: "";
+      height: 16px;
+      width: 16px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: .2s;
+      border-radius: 50%;
+    }
+
+    input:checked + .slider-toggle {
+      background-color: var(--accent-green);
+    }
+
+    input:checked + .slider-toggle:before {
+      transform: translateX(20px);
+    }
+
+    /* ==========================================================================
+       OPTION 4: THE HYBRID (Deck + Collapsible Drawer)
+       ========================================================================== */
+    .hybrid-container {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      height: 100%;
+      max-width: 980px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    .drawer-toggle {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      cursor: pointer;
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: var(--accent-mauve);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Header Navigation & Live Simulation Controls -->
+  <header>
+    <div class="brand">
+      <h1>🎛️ Sonomux</h1>
+      <span class="badge">Next-Gen UI Prototypes</span>
+    </div>
+
+    <!-- Prototype Switcher -->
+    <div class="view-switcher">
+      <button class="tab-btn active" onclick="switchView('deck')">1. Studio Deck</button>
+      <button class="tab-btn" onclick="switchView('flow')">2. Flow Graph</button>
+      <button class="tab-btn" onclick="switchView('studio')">3. Command Studio</button>
+      <button class="tab-btn" onclick="switchView('hybrid')">4. Hybrid (Deck + Drawer)</button>
+    </div>
+
+    <!-- Live Hardware Simulation Toggle -->
+    <div class="sim-bar">
+      <button id="headsetToggleBtn" class="sim-btn" onclick="toggleHeadsetSim()">
+        <span>󰋋 Arctis Nova 7:</span>
+        <strong id="headsetSimLabel">OFF (Standby)</strong>
+      </button>
+      <div class="status-pill">
+        <span class="dot" id="daemonDot"></span>
+        <span>Daemon: Live</span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+
+    <!-- ======================================================================
+         PROTOTYPE 1: THE STUDIO DECK
+         ====================================================================== -->
+    <div id="deck-pane" class="prototype-pane active">
+      <div class="deck-container">
+        <div class="deck-header">
+          <h2>🎛️ Broadcast & Mixer Deck</h2>
+          <div class="deck-meta">
+            <span>TC-Helicon GoXLR Mini: <strong style="color:var(--accent-green)">Connected</strong></span>
+            <span>Headset: <strong id="deckHeadsetStatus" style="color:var(--accent-yellow)">Standby</strong></span>
+            <span>Battery: <strong id="deckBatteryStatus" style="color:var(--text-sub)">Unavailable</strong></span>
+          </div>
+        </div>
+
+        <div class="channel-strips">
+          <!-- Strip 1: System -->
+          <div class="strip">
+            <span class="strip-tag">IPC</span>
+            <span class="strip-name">System</span>
+            <div class="meter-and-fader">
+              <div class="vu-meter"><div class="vu-level" id="vu-system" style="height: 60%"></div></div>
+              <div class="fader-track">
+                <input type="range" min="0" max="100" value="100" oninput="updateFader(this, 'val-system')">
+              </div>
+            </div>
+            <span class="fader-val" id="val-system">100%</span>
+            <button class="mute-btn" onclick="toggleMuteBtn(this)">MUTE</button>
+          </div>
+
+          <!-- Strip 2: Game (VSM) -->
+          <div class="strip highlight">
+            <span class="strip-tag" style="background: rgba(198, 160, 246, 0.2); color: var(--accent-mauve);">DSP / 7.1</span>
+            <span class="strip-name">Game (VSM)</span>
+            <div class="meter-and-fader">
+              <div class="vu-meter"><div class="vu-level" id="vu-game" style="height: 75%"></div></div>
+              <div class="fader-track">
+                <input type="range" min="0" max="100" value="85" oninput="updateFader(this, 'val-game')">
+              </div>
+            </div>
+            <span class="fader-val" id="val-game">85%</span>
+            <button class="mute-btn" onclick="toggleMuteBtn(this)">MUTE</button>
+          </div>
+
+          <!-- Strip 3: Chat -->
+          <div class="strip">
+            <span class="strip-tag">VOIP</span>
+            <span class="strip-name">Chat</span>
+            <div class="meter-and-fader">
+              <div class="vu-meter"><div class="vu-level" id="vu-chat" style="height: 40%"></div></div>
+              <div class="fader-track">
+                <input type="range" min="0" max="100" value="90" oninput="updateFader(this, 'val-chat')">
+              </div>
+            </div>
+            <span class="fader-val" id="val-chat">90%</span>
+            <button class="mute-btn" onclick="toggleMuteBtn(this)">MUTE</button>
+          </div>
+
+          <!-- Strip 4: Music -->
+          <div class="strip">
+            <span class="strip-tag">MEDIA</span>
+            <span class="strip-name">Music</span>
+            <div class="meter-and-fader">
+              <div class="vu-meter"><div class="vu-level" id="vu-music" style="height: 55%"></div></div>
+              <div class="fader-track">
+                <input type="range" min="0" max="100" value="70" oninput="updateFader(this, 'val-music')">
+              </div>
+            </div>
+            <span class="fader-val" id="val-music">70%</span>
+            <button class="mute-btn" onclick="toggleMuteBtn(this)">MUTE</button>
+          </div>
+
+          <!-- Strip 5: Physical Desk Speakers -->
+          <div class="strip output-sink" id="strip-speakers">
+            <span class="strip-tag" style="background: rgba(238, 212, 159, 0.2); color: var(--accent-yellow);">OUTPUT</span>
+            <span class="strip-name">Speakers</span>
+            <div class="meter-and-fader">
+              <div class="vu-meter"><div class="vu-level" id="vu-speakers" style="height: 70%"></div></div>
+              <div class="fader-track">
+                <input type="range" min="0" max="100" value="100" id="fader-speakers" oninput="updateFader(this, 'val-speakers')">
+              </div>
+            </div>
+            <span class="fader-val" id="val-speakers">100%</span>
+            <button class="mute-btn" id="mute-speakers" onclick="toggleMuteBtn(this)">MUTE</button>
+          </div>
+
+          <!-- Strip 6: Arctis Nova 7 Output -->
+          <div class="strip output-sink" id="strip-headset">
+            <span class="strip-tag" style="background: rgba(138, 173, 244, 0.2); color: var(--accent-blue);">OUTPUT</span>
+            <span class="strip-name">Arctis 7</span>
+            <div class="meter-and-fader">
+              <div class="vu-meter"><div class="vu-level" id="vu-headset" style="height: 0%"></div></div>
+              <div class="fader-track">
+                <input type="range" min="0" max="100" value="80" id="fader-headset" oninput="updateFader(this, 'val-headset')">
+              </div>
+            </div>
+            <span class="fader-val" id="val-headset">80%</span>
+            <button class="mute-btn" id="mute-headset" onclick="toggleMuteBtn(this)">STANDBY</button>
+          </div>
+        </div>
+
+        <div class="deck-footer">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span class="rule-pill">⚡ Active Rule</span>
+            <span id="deckRuleText">Standby: Routing desk speakers normally at 100%. Headset loopback idle.</span>
+          </div>
+          <span>Latency: <strong style="color:var(--accent-cyan)">1.8ms</strong> | Downstream traversal: <strong style="color:var(--accent-green)">Active</strong></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ======================================================================
+         PROTOTYPE 2: THE FLOW GRAPH
+         ====================================================================== -->
+    <div id="flow-pane" class="prototype-pane">
+      <div class="flow-container">
+        <div class="deck-header">
+          <h2>🌐 Signal Path & Audio Graph Topology</h2>
+          <div class="deck-meta">
+            <span>PipeWire Node Graph: <strong style="color:var(--accent-cyan)">Synchronized</strong></span>
+          </div>
+        </div>
+
+        <div class="flow-canvas">
+          <!-- Col 1: Sources / Apps -->
+          <div class="flow-col">
+            <h3>Input Streams & Apps</h3>
+            <div class="node-card active-stream">
+              <div class="node-header">
+                <span class="node-title">🌐 Zen Browser</span>
+                <span class="strip-tag">PINNED</span>
+              </div>
+              <span class="node-sub">Enforced to GoXLR System</span>
+            </div>
+
+            <div class="node-card active-stream">
+              <div class="node-header">
+                <span class="node-title">🎮 Steam Games</span>
+                <span class="strip-tag">7.1 DSP</span>
+              </div>
+              <span class="node-sub">Enforced to Virtual Surround</span>
+            </div>
+
+            <div class="node-card active-stream">
+              <div class="node-header">
+                <span class="node-title">🎙️ Discord / Chat</span>
+                <span class="strip-tag">VOIP</span>
+              </div>
+              <span class="node-sub">GoXLR Chat Stream</span>
+            </div>
+          </div>
+
+          <!-- Col 2: Sonomux Coordinator Hub -->
+          <div class="flow-col" style="align-items: center;">
+            <h3>Policy Coordinator</h3>
+            <div class="engine-hub">
+              <h4>🎛️ Sonomux Engine</h4>
+              <p style="font-size:0.75rem; color:var(--text-sub);">Dynamic Stream Arbiter & Loopback Manager</p>
+              
+              <div class="engine-rule-badge" id="flowEngineBadge">
+                <div style="font-weight:700; color:var(--accent-green);">Rule: Headset Standby</div>
+                <div style="color:var(--text-sub); margin-top:2px;">Desk Speakers at unity gain. Headset loopback module unloaded.</div>
+              </div>
+
+              <div style="font-size: 0.72rem; color: var(--accent-mauve); font-weight: 600;">
+                Downstream volume traversal: Unity gain preserved on DSP
+              </div>
+            </div>
+          </div>
+
+          <!-- Col 3: Physical Endpoints -->
+          <div class="flow-col">
+            <h3>Physical Outputs</h3>
+            <div class="node-card active-stream" id="flowNodeSpeakers">
+              <div class="node-header">
+                <span class="node-title">🔊 Desk Speakers</span>
+                <span class="strip-tag" id="flowTagSpeakers" style="color:var(--accent-green)">ACTIVE</span>
+              </div>
+              <span class="node-sub">GoXLR Mini Headphone Out</span>
+              <span style="font-size:0.8rem; font-weight:700;" id="flowVolSpeakers">100% Loudness</span>
+            </div>
+
+            <div class="node-card" id="flowNodeHeadset">
+              <div class="node-header">
+                <span class="node-title">🎧 Arctis Nova 7</span>
+                <span class="strip-tag" id="flowTagHeadset" style="color:var(--accent-yellow)">STANDBY</span>
+              </div>
+              <span class="node-sub">USB HID Wireless Transceiver</span>
+              <span style="font-size:0.8rem; font-weight:700;" id="flowVolHeadset">Module Idle</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ======================================================================
+         PROTOTYPE 3: THE COMMAND STUDIO
+         ====================================================================== -->
+    <div id="studio-pane" class="prototype-pane">
+      <div class="studio-container">
+        <!-- Sidebar -->
+        <div class="studio-sidebar">
+          <div class="sidebar-item active">󰕮 Dashboard</div>
+          <div class="sidebar-item">󰋋 Hardware</div>
+          <div class="sidebar-item">󰒓 Rule Studio</div>
+          <div class="sidebar-item">󰑭 Stream Pins</div>
+          <div class="sidebar-item">󰋚 Profiles</div>
+          <div style="margin-top:auto; padding:10px 4px; font-size:0.75rem; color:var(--text-muted);">
+            v0.1.0 • Slint Native
+          </div>
+        </div>
+
+        <!-- Content -->
+        <div class="studio-content">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div>
+              <h2 style="font-size:1.2rem; font-weight:800;">Coordinator Command Hub</h2>
+              <p style="font-size:0.8rem; color:var(--text-sub);">Configure declarative switching rules and hardware profiles.</p>
+            </div>
+            <div style="display:flex; gap:8px;">
+              <button class="sim-btn" style="background:var(--accent-mauve); color:#181926;">+ New Rule</button>
+            </div>
+          </div>
+
+          <!-- Cards Grid -->
+          <div class="studio-card-grid">
+            <div class="studio-card">
+              <span class="strip-tag" style="width:fit-content; background:rgba(198, 160, 246, 0.2); color:var(--accent-mauve);">HARDWARE MIXER</span>
+              <h3 style="font-size:1rem; font-weight:700;">TC-Helicon GoXLR Mini</h3>
+              <p style="font-size:0.8rem; color:var(--text-sub);">IPC Socket: /tmp/goxlr.socket • Status: Connected</p>
+              <div style="display:flex; justify-content:space-between; font-size:0.82rem; margin-top:8px;">
+                <span>Desk Speakers Channel:</span>
+                <strong>Headphones (DAC)</strong>
+              </div>
+            </div>
+
+            <div class="studio-card">
+              <span class="strip-tag" style="width:fit-content; background:rgba(138, 173, 244, 0.2); color:var(--accent-blue);">SMART PERIPHERAL</span>
+              <h3 style="font-size:1rem; font-weight:700;">SteelSeries Arctis Nova 7</h3>
+              <p style="font-size:0.8rem; color:var(--text-sub);">Vendor: 0x1038 • Product: 0x12ad (HID)</p>
+              <div style="display:flex; justify-content:space-between; font-size:0.82rem; margin-top:8px;">
+                <span>Battery Level:</span>
+                <strong id="studioBattery">Standby (Unavailable)</strong>
+              </div>
+            </div>
+          </div>
+
+          <!-- Declarative Rules Studio -->
+          <div style="display:flex; flex-direction:column; gap:12px;">
+            <h3 style="font-size:0.95rem; font-weight:700; color:var(--accent-mauve);">Declarative Automation Rules</h3>
+
+            <div class="rule-item">
+              <div>
+                <div style="font-weight:700; font-size:0.9rem;">Auto Headset Switcher</div>
+                <div style="font-size:0.75rem; color:var(--text-sub); margin-top:2px;">
+                  Trigger: <code>headset.status == Active</code> (Debounce: 1500ms) ➔ Mute Speakers (0%) + Route Submix Loopback
+                </div>
+              </div>
+              <label class="switch">
+                <input type="checkbox" checked id="ruleToggleSwitcher">
+                <span class="slider-toggle"></span>
+              </label>
+            </div>
+
+            <div class="rule-item">
+              <div>
+                <div style="font-weight:700; font-size:0.9rem;">Browser Stream Pinning & Isolation</div>
+                <div style="font-size:0.75rem; color:var(--text-sub); margin-top:2px;">
+                  Trigger: <code>node.app == "Zen"</code> ➔ Enforce routing to GoXLR System (bypass spatializer)
+                </div>
+              </div>
+              <label class="switch">
+                <input type="checkbox" checked>
+                <span class="slider-toggle"></span>
+              </label>
+            </div>
+
+            <div class="rule-item">
+              <div>
+                <div style="font-weight:700; font-size:0.9rem;">DSP Downstream Volume Traversal</div>
+                <div style="font-size:0.75rem; color:var(--text-sub); margin-top:2px;">
+                  Keep Virtual Surround Manager at 100% unity gain; map volume keystrokes directly to physical DAC.
+                </div>
+              </div>
+              <label class="switch">
+                <input type="checkbox" checked>
+                <span class="slider-toggle"></span>
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ======================================================================
+         PROTOTYPE 4: THE HYBRID (Deck + Collapsible Drawer)
+         ====================================================================== -->
+    <div id="hybrid-pane" class="prototype-pane">
+      <div class="hybrid-container">
+        <!-- Compact Deck -->
+        <div class="deck-container" style="flex: initial; min-height: 380px;">
+          <div class="deck-header">
+            <h2>🎛️ Sonomux Deck (Hybrid Mode)</h2>
+            <div class="deck-meta">
+              <span>Quick Profile: <strong style="color:var(--accent-blue)">Default Gaming</strong></span>
+            </div>
+          </div>
+
+          <div class="channel-strips" style="min-height: 260px;">
+            <div class="strip">
+              <span class="strip-tag">SYS</span>
+              <span class="strip-name">System</span>
+              <div class="meter-and-fader"><div class="vu-meter" style="height:140px;"><div class="vu-level" style="height:60%"></div></div><div class="fader-track" style="height:140px;"><input type="range" min="0" max="100" value="100" style="height:130px;"></div></div>
+              <span class="fader-val">100%</span>
+            </div>
+            <div class="strip highlight">
+              <span class="strip-tag">7.1</span>
+              <span class="strip-name">Game</span>
+              <div class="meter-and-fader"><div class="vu-meter" style="height:140px;"><div class="vu-level" style="height:80%"></div></div><div class="fader-track" style="height:140px;"><input type="range" min="0" max="100" value="85" style="height:130px;"></div></div>
+              <span class="fader-val">85%</span>
+            </div>
+            <div class="strip">
+              <span class="strip-tag">VOIP</span>
+              <span class="strip-name">Chat</span>
+              <div class="meter-and-fader"><div class="vu-meter" style="height:140px;"><div class="vu-level" style="height:30%"></div></div><div class="fader-track" style="height:140px;"><input type="range" min="0" max="100" value="90" style="height:130px;"></div></div>
+              <span class="fader-val">90%</span>
+            </div>
+            <div class="strip">
+              <span class="strip-tag">MEDIA</span>
+              <span class="strip-name">Music</span>
+              <div class="meter-and-fader"><div class="vu-meter" style="height:140px;"><div class="vu-level" style="height:45%"></div></div><div class="fader-track" style="height:140px;"><input type="range" min="0" max="100" value="70" style="height:130px;"></div></div>
+              <span class="fader-val">70%</span>
+            </div>
+            <div class="strip output-sink">
+              <span class="strip-tag">OUT</span>
+              <span class="strip-name">Speakers</span>
+              <div class="meter-and-fader"><div class="vu-meter" style="height:140px;"><div class="vu-level" id="vu-hybrid-spk" style="height:70%"></div></div><div class="fader-track" style="height:140px;"><input type="range" min="0" max="100" value="100" id="fader-hybrid-spk" style="height:130px;"></div></div>
+              <span class="fader-val" id="val-hybrid-spk">100%</span>
+            </div>
+            <div class="strip output-sink">
+              <span class="strip-tag">OUT</span>
+              <span class="strip-name">Arctis 7</span>
+              <div class="meter-and-fader"><div class="vu-meter" style="height:140px;"><div class="vu-level" id="vu-hybrid-hds" style="height:0%"></div></div><div class="fader-track" style="height:140px;"><input type="range" min="0" max="100" value="80" id="fader-hybrid-hds" style="height:130px;"></div></div>
+              <span class="fader-val" id="val-hybrid-hds">80%</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Collapsible Rule & Topology Drawer -->
+        <div class="drawer-toggle" onclick="toggleHybridDrawer()">
+          <span>⚙️ Rule Studio & Signal Topology Drawer</span>
+          <span id="drawerArrow">▼ Click to Expand</span>
+        </div>
+
+        <div id="hybridDrawerContent" style="display:none; background:var(--bg-surface); border:1px solid var(--border); border-radius:10px; padding:16px;">
+          <div style="font-size:0.85rem; font-weight:700; color:var(--text); margin-bottom:8px;">Live Automation State</div>
+          <p style="font-size:0.8rem; color:var(--text-sub);">
+            This hybrid approach allows instant day-to-day tactile level mixing while leaving deep declarative rule management only a single click away.
+          </p>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <script>
+    let headsetActive = false;
+
+    function switchView(viewName) {
+      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+      document.querySelectorAll('.prototype-pane').forEach(pane => pane.classList.remove('active'));
+
+      if (viewName === 'deck') {
+        document.querySelectorAll('.tab-btn')[0].classList.add('active');
+        document.getElementById('deck-pane').classList.add('active');
+      } else if (viewName === 'flow') {
+        document.querySelectorAll('.tab-btn')[1].classList.add('active');
+        document.getElementById('flow-pane').classList.add('active');
+      } else if (viewName === 'studio') {
+        document.querySelectorAll('.tab-btn')[2].classList.add('active');
+        document.getElementById('studio-pane').classList.add('active');
+      } else if (viewName === 'hybrid') {
+        document.querySelectorAll('.tab-btn')[3].classList.add('active');
+        document.getElementById('hybrid-pane').classList.add('active');
+      }
+    }
+
+    function toggleHeadsetSim() {
+      headsetActive = !headsetActive;
+      const btn = document.getElementById('headsetToggleBtn');
+      const label = document.getElementById('headsetSimLabel');
+
+      if (headsetActive) {
+        btn.classList.add('active');
+        label.innerText = 'ON (80% 󰂂 Active)';
+
+        // 1. Studio Deck reaction
+        document.getElementById('deckHeadsetStatus').innerText = 'Active (On Head)';
+        document.getElementById('deckHeadsetStatus').style.color = 'var(--accent-green)';
+        document.getElementById('deckBatteryStatus').innerText = '80% (Discharging)';
+        document.getElementById('deckBatteryStatus').style.color = 'var(--accent-green)';
+
+        // Mute desk speakers to 0%
+        document.getElementById('fader-speakers').value = 0;
+        document.getElementById('val-speakers').innerText = '0%';
+        document.getElementById('mute-speakers').classList.add('muted');
+        document.getElementById('mute-speakers').innerText = 'MUTED (0%)';
+        document.getElementById('vu-speakers').style.height = '0%';
+
+        // Activate headset loopback
+        document.getElementById('mute-headset').innerText = 'STREAMING';
+        document.getElementById('mute-headset').style.background = 'var(--accent-green)';
+        document.getElementById('mute-headset').style.color = '#181926';
+        document.getElementById('vu-headset').style.height = '75%';
+
+        document.getElementById('deckRuleText').innerText = 'Headset Active ➔ Speakers Muted (0%) ➔ Loopback #536870918 Streaming';
+
+        // 2. Flow Graph reaction
+        document.getElementById('flowEngineBadge').innerHTML = `
+          <div style="font-weight:700; color:var(--accent-green);">Rule: Headset Active ➔ Routing Switched</div>
+          <div style="color:var(--text-sub); margin-top:2px;">Desk Speakers muted (0%). Loopback #536870918 established to Arctis Nova 7.</div>
+        `;
+        document.getElementById('flowNodeSpeakers').classList.remove('active-stream');
+        document.getElementById('flowNodeSpeakers').classList.add('muted-sink');
+        document.getElementById('flowTagSpeakers').innerText = 'MUTED (0%)';
+        document.getElementById('flowTagSpeakers').style.color = 'var(--accent-red)';
+        document.getElementById('flowVolSpeakers').innerText = '0% Loudness (Saved: 100%)';
+
+        document.getElementById('flowNodeHeadset').classList.add('active-stream');
+        document.getElementById('flowTagHeadset').innerText = 'STREAMING';
+        document.getElementById('flowTagHeadset').style.color = 'var(--accent-green)';
+        document.getElementById('flowVolHeadset').innerText = '80% Loudness (Feed: Chat Submix)';
+
+        // 3. Studio reaction
+        document.getElementById('studioBattery').innerText = '80% (Discharging)';
+        document.getElementById('studioBattery').style.color = 'var(--accent-green)';
+
+        // 4. Hybrid reaction
+        document.getElementById('fader-hybrid-spk').value = 0;
+        document.getElementById('val-hybrid-spk').innerText = '0%';
+        document.getElementById('vu-hybrid-spk').style.height = '0%';
+        document.getElementById('vu-hybrid-hds').style.height = '75%';
+
+      } else {
+        btn.classList.remove('active');
+        label.innerText = 'OFF (Standby)';
+
+        // 1. Studio Deck reaction
+        document.getElementById('deckHeadsetStatus').innerText = 'Standby (Off)';
+        document.getElementById('deckHeadsetStatus').style.color = 'var(--accent-yellow)';
+        document.getElementById('deckBatteryStatus').innerText = 'Unavailable';
+        document.getElementById('deckBatteryStatus').style.color = 'var(--text-sub)';
+
+        // Restore desk speakers to 100%
+        document.getElementById('fader-speakers').value = 100;
+        document.getElementById('val-speakers').innerText = '100%';
+        document.getElementById('mute-speakers').classList.remove('muted');
+        document.getElementById('mute-speakers').innerText = 'MUTE';
+        document.getElementById('vu-speakers').style.height = '70%';
+
+        // Deactivate headset loopback
+        document.getElementById('mute-headset').innerText = 'STANDBY';
+        document.getElementById('mute-headset').style.background = 'var(--bg-surface-elevated)';
+        document.getElementById('mute-headset').style.color = 'var(--text)';
+        document.getElementById('vu-headset').style.height = '0%';
+
+        document.getElementById('deckRuleText').innerText = 'Standby: Routing desk speakers normally at 100%. Headset loopback idle.';
+
+        // 2. Flow Graph reaction
+        document.getElementById('flowEngineBadge').innerHTML = `
+          <div style="font-weight:700; color:var(--accent-yellow);">Rule: Headset Standby</div>
+          <div style="color:var(--text-sub); margin-top:2px;">Desk Speakers at unity gain. Headset loopback module unloaded.</div>
+        `;
+        document.getElementById('flowNodeSpeakers').classList.add('active-stream');
+        document.getElementById('flowNodeSpeakers').classList.remove('muted-sink');
+        document.getElementById('flowTagSpeakers').innerText = 'ACTIVE';
+        document.getElementById('flowTagSpeakers').style.color = 'var(--accent-green)';
+        document.getElementById('flowVolSpeakers').innerText = '100% Loudness';
+
+        document.getElementById('flowNodeHeadset').classList.remove('active-stream');
+        document.getElementById('flowTagHeadset').innerText = 'STANDBY';
+        document.getElementById('flowTagHeadset').style.color = 'var(--accent-yellow)';
+        document.getElementById('flowVolHeadset').innerText = 'Module Idle';
+
+        // 3. Studio reaction
+        document.getElementById('studioBattery').innerText = 'Standby (Unavailable)';
+        document.getElementById('studioBattery').style.color = 'var(--text-sub)';
+
+        // 4. Hybrid reaction
+        document.getElementById('fader-hybrid-spk').value = 100;
+        document.getElementById('val-hybrid-spk').innerText = '100%';
+        document.getElementById('vu-hybrid-spk').style.height = '70%';
+        document.getElementById('vu-hybrid-hds').style.height = '0%';
+      }
+    }
+
+    function updateFader(input, labelId) {
+      document.getElementById(labelId).innerText = input.value + '%';
+    }
+
+    function toggleMuteBtn(btn) {
+      btn.classList.toggle('muted');
+      if (btn.classList.contains('muted')) {
+        btn.innerText = 'MUTED';
+      } else {
+        btn.innerText = 'MUTE';
+      }
+    }
+
+    function toggleHybridDrawer() {
+      const drawer = document.getElementById('hybridDrawerContent');
+      const arrow = document.getElementById('drawerArrow');
+      if (drawer.style.display === 'none') {
+        drawer.style.display = 'block';
+        arrow.innerText = '▲ Click to Collapse';
+      } else {
+        drawer.style.display = 'none';
+        arrow.innerText = '▼ Click to Expand';
+      }
+    }
+
+    // Animate VU meters slightly for realism
+    setInterval(() => {
+      document.querySelectorAll('.vu-level').forEach(el => {
+        const baseH = parseInt(el.style.height) || 0;
+        if (baseH > 0) {
+          const jitter = (Math.random() * 8) - 4;
+          const next = Math.max(10, Math.min(95, baseH + jitter));
+          el.style.height = next + '%';
+        }
+      });
+    }, 150);
+  </script>
+</body>
+</html>
