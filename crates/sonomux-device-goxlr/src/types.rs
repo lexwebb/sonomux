@@ -90,9 +90,26 @@ pub struct MixerLevels {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FaderStatus {
+    pub channel: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MixerData {
     pub levels: MixerLevels,
     pub router: HashMap<String, HashMap<String, bool>>,
+    /// Physical fader ("A".."D") to assigned channel.
+    #[serde(default)]
+    pub fader_status: HashMap<String, FaderStatus>,
+}
+
+impl MixerData {
+    /// Channels on the physical faders, left to right (A, B, C, D).
+    pub fn fader_channels(&self) -> Vec<String> {
+        let mut faders: Vec<_> = self.fader_status.iter().collect();
+        faders.sort_by(|a, b| a.0.cmp(b.0));
+        faders.into_iter().map(|(_, f)| f.channel.clone()).collect()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

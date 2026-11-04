@@ -1,9 +1,17 @@
 //! Audio server backend abstraction for PipeWire (Linux) and CoreAudio (macOS).
 
+#[cfg(target_os = "macos")]
+pub mod coreaudio;
 pub mod pulse;
 
 use async_trait::async_trait;
 pub use pulse::PulseManager;
+
+/// The audio backend for the current OS.
+#[cfg(target_os = "macos")]
+pub use coreaudio::CoreAudioManager as Backend;
+#[cfg(not(target_os = "macos"))]
+pub use pulse::PulseManager as Backend;
 use thiserror::Error;
 
 #[derive(Debug, Error)]

@@ -227,6 +227,17 @@ impl GoXLRClient {
 
         Ok(mixer.levels.volumes.clone())
     }
+
+    /// Channels on the physical faders, left to right (A, B, C, D).
+    pub async fn get_fader_channels(&self) -> Result<Vec<String>, DeviceError> {
+        let status = self.get_status().await?;
+        let serial = self.get_serial().await?;
+        let mixer = status
+            .mixers
+            .get(&serial)
+            .ok_or_else(|| DeviceError::NotFound(format!("Mixer {} not in status", serial)))?;
+        Ok(mixer.fader_channels())
+    }
 }
 
 #[async_trait]

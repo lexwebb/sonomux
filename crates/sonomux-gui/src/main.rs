@@ -401,6 +401,16 @@ slint! {
         in-out property <float> game_volume: 85.0;
         in-out property <float> chat_volume: 90.0;
         in-out property <float> music_volume: 70.0;
+        in-out property <float> mic_volume: 100.0;
+        // Strip position (0-4) for each input channel; set from the GoXLR fader assignment.
+        // Whether the headset's audio device exists; hides its strip and badge when absent.
+        in property <bool> headset_present: false;
+        in property <string> platform_label: "PIPEWIRE / LINUX";
+        in property <int> mic_slot: 0;
+        in property <int> system_slot: 1;
+        in property <int> game_slot: 2;
+        in property <int> chat_slot: 3;
+        in property <int> music_slot: 4;
 
         in-out property <bool> speakers_muted: false;
         in-out property <bool> headset_active: false;
@@ -514,7 +524,7 @@ slint! {
                             color: #4a4f5d;
                         }
                         Text {
-                            text: "PIPEWIRE / LINUX";
+                            text: root.platform_label;
                             font-size: 8px;
                             font-weight: 700;
                             font-family: "monospace";
@@ -556,7 +566,7 @@ slint! {
                             alignment: center;
 
                             // Headset Telemetry Pill
-                            Rectangle {
+                            if root.headset_present : Rectangle {
                                 background: #15171d;
                                 border-radius: 3px;
                                 border-width: 1px;
@@ -620,12 +630,32 @@ slint! {
                         spacing: 12px;
                         vertical-stretch: 1;
 
-                        // 6 Channel Strips
-                        HorizontalLayout {
-                            spacing: 8px;
+                        // 7 strips: inputs in hardware fader order (slots 0-4), then outputs.
+                        // Placed by x, not a layout, so the order can follow the GoXLR.
+                        Rectangle {
                             vertical-stretch: 1;
+                            property <length> gap: 8px;
+                            property <int> count: root.headset_present ? 7 : 6;
+                            property <length> cell: (self.width - (self.count - 1) * self.gap) / self.count;
 
                             MixerStrip {
+                                x: root.mic_slot * (parent.cell + parent.gap);
+                                width: parent.cell;
+                                height: parent.height;
+                                title: "MIC";
+                                subtitle: "INPUT";
+                                volume <=> root.mic_volume;
+                                muted: false;
+                                volume_changed(v) => {
+                                    root.channel_volume_changed("Mic", v);
+                                }
+                                toggle_mute() => {}
+                            }
+
+                            MixerStrip {
+                                x: root.system_slot * (parent.cell + parent.gap);
+                                width: parent.cell;
+                                height: parent.height;
                                 title: "SYSTEM";
                                 subtitle: "CH 1-2";
                                 volume <=> root.system_volume;
@@ -637,6 +667,9 @@ slint! {
                             }
 
                             MixerStrip {
+                                x: root.game_slot * (parent.cell + parent.gap);
+                                width: parent.cell;
+                                height: parent.height;
                                 title: "GAME";
                                 subtitle: "VSM 7.1";
                                 volume <=> root.game_volume;
@@ -648,6 +681,9 @@ slint! {
                             }
 
                             MixerStrip {
+                                x: root.chat_slot * (parent.cell + parent.gap);
+                                width: parent.cell;
+                                height: parent.height;
                                 title: "CHAT";
                                 subtitle: "VOIP";
                                 volume <=> root.chat_volume;
@@ -659,6 +695,9 @@ slint! {
                             }
 
                             MixerStrip {
+                                x: root.music_slot * (parent.cell + parent.gap);
+                                width: parent.cell;
+                                height: parent.height;
                                 title: "MUSIC";
                                 subtitle: "MEDIA";
                                 volume <=> root.music_volume;
@@ -670,6 +709,9 @@ slint! {
                             }
 
                             MixerStrip {
+                                x: 5 * (parent.cell + parent.gap);
+                                width: parent.cell;
+                                height: parent.height;
                                 title: "SPEAKERS";
                                 subtitle: "LINE OUT";
                                 is_output: true;
@@ -685,6 +727,10 @@ slint! {
                             }
 
                             MixerStrip {
+                                x: 6 * (parent.cell + parent.gap);
+                                width: parent.cell;
+                                height: parent.height;
+                                visible: root.headset_present;
                                 title: "NOVA 7";
                                 subtitle: "WIRELESS";
                                 is_output: true;
@@ -721,6 +767,7 @@ slint! {
                                     Text {
                                         text: root.headset_active ?
                                             "HEADSET ACTIVE // SPEAKERS MUTED // LOOPBACK STREAMING" :
+                                            !root.headset_present ? "NO HEADSET // SPEAKERS ACTIVE" :
                                             "HEADSET STANDBY // SPEAKERS ACTIVE (100%) // LOOPBACK IDLE";
                                         font-size: 10px;
                                         font-weight: 700;
@@ -1009,6 +1056,26 @@ pub fn find_existing_hyprland_address(clients_json: &str) -> Option<String> {
     None
 }
 
+/// Input strip channels, in their order when none are on a fader.
+const STRIP_CHANNELS: [&str; 5] = ["Mic", "System", "Game", "Chat", "Music"];
+
+/// Slot (0-4) for each of `STRIP_CHANNELS`: fader channels first, in fader order (A-D),
+/// then the rest in default order.
+pub fn strip_slots(fader_channels: &[String]) -> [i32; 5] {
+    let mut order: Vec<&str> = fader_channels
+        .iter()
+        .map(|c| c.as_str())
+        .filter(|c| STRIP_CHANNELS.contains(c))
+        .collect();
+    order.dedup();
+    for ch in STRIP_CHANNELS {
+        if !order.contains(&ch) {
+            order.push(ch);
+        }
+    }
+    STRIP_CHANNELS.map(|ch| order.iter().position(|&c| c == ch).unwrap() as i32)
+}
+
 /// Attempts to focus an existing window if Sonomux is already running.
 /// Returns true if an existing window was found and focused.
 pub fn try_focus_existing_instance() -> bool {
@@ -1070,6 +1137,9 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Starting Sonomux Slint GUI...");
     let main_window = MainWindow::new()?;
+    if cfg!(target_os = "macos") {
+        main_window.set_platform_label("COREAUDIO / MACOS".into());
+    }
 
     let goxlr = sonomux_device_goxlr::GoXLRClient::new(sonomux_device_goxlr::DEFAULT_GOXLR_SOCKET);
 
@@ -1082,7 +1152,15 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Try connecting to daemon over session D-Bus
-    let connection = zbus::Connection::session().await.ok();
+    // Retry briefly: the daemon may still be starting (e.g. right after login or install).
+    let mut connection = None;
+    for _ in 0..10 {
+        connection = sonomux_core::ipc::connect().await.ok();
+        if connection.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
     let dbus_proxy = if let Some(ref conn) = connection {
         SonomuxDaemonProxy::new(conn).await.ok()
     } else {
@@ -1169,6 +1247,41 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Follow the GoXLR fader assignment so strips match the hardware order.
+    let slot_handle = main_window.as_weak();
+    let slot_goxlr = goxlr.clone();
+    let headset_sink = sonomux_core::AppConfig::load_or_create()
+        .map(|(cfg, _)| cfg.devices.headset_sink)
+        .unwrap_or_default();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(2));
+        loop {
+            interval.tick().await;
+            // Also show hardware that is actually there: hide the headset when its device is gone.
+            let present = sonomux_backend::Backend::sink_exists(&headset_sink).await;
+            let weak = slot_handle.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = weak.upgrade() {
+                    ui.set_headset_present(present);
+                }
+            });
+            let Ok(faders) = slot_goxlr.get_fader_channels().await else {
+                continue;
+            };
+            let [mic, system, game, chat, music] = strip_slots(&faders);
+            let weak = slot_handle.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = weak.upgrade() {
+                    ui.set_mic_slot(mic);
+                    ui.set_system_slot(system);
+                    ui.set_game_slot(game);
+                    ui.set_chat_slot(chat);
+                    ui.set_music_slot(music);
+                }
+            });
+        }
+    });
+
     // Spawn periodic state polling (either through D-Bus or direct hardware)
     let handle = main_window.as_weak();
     let proxy_for_poll = dbus_proxy.clone();
@@ -1242,6 +1355,11 @@ async fn main() -> anyhow::Result<()> {
                                         ui.set_music_volume(v as f32);
                                     }
                                 }
+                                if !recent.contains("Mic") {
+                                    if let Some(&v) = map.get("Mic") {
+                                        ui.set_mic_volume(v as f32);
+                                    }
+                                }
                             }
                             ui.set_routing_state(if loop_up {
                                 "STREAMING (LOOPBACK ACTIVE)".into()
@@ -1291,6 +1409,11 @@ async fn main() -> anyhow::Result<()> {
                         if !recent.contains("Music") {
                             if let Some(&vol) = vols.get("Music") {
                                 ui.set_music_volume((vol as f32 / 255.0) * 100.0);
+                            }
+                        }
+                        if !recent.contains("Mic") {
+                            if let Some(&vol) = vols.get("Mic") {
+                                ui.set_mic_volume((vol as f32 / 255.0) * 100.0);
                             }
                         }
                     }
@@ -1387,7 +1510,7 @@ async fn main() -> anyhow::Result<()> {
             }
             if let Ok((cfg, _)) = sonomux_core::AppConfig::load_or_create() {
                 let keep_off: Vec<&str> = cfg.policies.keep_off_surround.iter().map(|s| s.as_str()).collect();
-                let _ = sonomux_backend::PulseManager::enforce_surround_policies(
+                let _ = sonomux_backend::Backend::enforce_surround_policies(
                     &cfg.policies.surround_out_node,
                     &cfg.policies.surround_in_node,
                     &cfg.devices.goxlr_game_sink,
@@ -1395,7 +1518,7 @@ async fn main() -> anyhow::Result<()> {
                     &keep_off,
                 )
                 .await;
-                let _ = sonomux_backend::PulseManager::enforce_stream_routing(
+                let _ = sonomux_backend::Backend::enforce_stream_routing(
                     &cfg.routing,
                     &cfg.devices,
                     &cfg.policies,
@@ -1538,6 +1661,17 @@ async fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strip_slots_follow_fader_order() {
+        let faders: Vec<String> = ["Mic", "Chat", "Music", "System"].map(String::from).into();
+        // Mic, System, Game, Chat, Music
+        assert_eq!(strip_slots(&faders), [0, 3, 4, 1, 2]);
+        // Nothing on faders: default order. Unknown channels are skipped.
+        assert_eq!(strip_slots(&[]), [0, 1, 2, 3, 4]);
+        let odd: Vec<String> = ["LineIn", "Game"].map(String::from).into();
+        assert_eq!(strip_slots(&odd), [1, 2, 0, 3, 4]);
+    }
 
     #[test]
     fn test_find_existing_hyprland_address_matches_title() {

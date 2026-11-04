@@ -277,3 +277,11 @@ fn test_channel_as_str_all() {
         assert!(!out.as_str().is_empty());
     }
 }
+
+#[test]
+fn fader_channels_are_sorted_a_to_d() {
+    let json = r#"{"levels":{"volumes":{}},"router":{},"fader_status":{
+        "C":{"channel":"Music"},"A":{"channel":"Mic"},"D":{"channel":"System"},"B":{"channel":"Chat"}}}"#;
+    let m: sonomux_device_goxlr::MixerData = serde_json::from_str(json).unwrap();
+    assert_eq!(m.fader_channels(), ["Mic", "Chat", "Music", "System"]);
+}

@@ -16,11 +16,11 @@ trait SonomuxDaemon {
 async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
-    let connection = match zbus::Connection::session().await {
+    let connection = match sonomux_core::ipc::connect().await {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("Error connecting to D-Bus session: {}", e);
-            eprintln!("Is 'sonomuxd' running? Try: systemctl --user start sonomuxd");
+            eprintln!("Error connecting to sonomuxd: {}", e);
+            eprintln!("Is 'sonomuxd' running? Linux: systemctl --user start sonomuxd, macOS: launchctl kickstart gui/$UID/org.sonomux.sonomuxd");
             std::process::exit(1);
         }
     };

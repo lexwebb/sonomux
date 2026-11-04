@@ -43,6 +43,7 @@ impl Default for Rule {
 }
 
 pub fn default_rules() -> Vec<Rule> {
+    let dev = crate::config::DevicesConfig::default();
     vec![Rule {
         name: "Auto Headset Switcher".to_string(),
         enabled: true,
@@ -62,14 +63,14 @@ pub fn default_rules() -> Vec<Rule> {
                 level: 0.0,
             },
             Action::EnsureLoopback {
-                source: "alsa_input.usb-TC-Helicon_GoXLRMini-00.HiFi__Line5__source".to_string(),
-                sink: "alsa_output.usb-SteelSeries_Arctis_Nova_7-00.analog-stereo".to_string(),
+                source: dev.goxlr_mix_source.clone(),
+                sink: dev.headset_sink,
                 latency_ms: 20,
             },
         ],
         actions_on_exit: vec![
             Action::DestroyLoopback {
-                source: "alsa_input.usb-TC-Helicon_GoXLRMini-00.HiFi__Line5__source".to_string(),
+                source: dev.goxlr_mix_source,
             },
             Action::RestoreHardwareVolume {
                 device_id: "goxlr".to_string(),

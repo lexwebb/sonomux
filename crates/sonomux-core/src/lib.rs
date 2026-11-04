@@ -1,5 +1,6 @@
 pub mod classification;
 pub mod config;
+pub mod ipc;
 pub mod rules;
 pub mod traits;
 

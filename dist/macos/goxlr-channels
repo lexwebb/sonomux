@@ -1,0 +1,57 @@
+#!/usr/bin/env swift
+// Splits the GoXLR Mini into per-channel CoreAudio devices (GoXLR System/Game/Chat/Music/Sample,
+// plus Stream Mix/Chat Mic/Sampler inputs). Stand-in for GoXLR Utility's Aggregate Manager,
+// which can't find the device on macOS 26 (goxlr-utility #226). Same trick: an aggregate per
+// channel wrapping the GoXLR, with its preferred stereo pair set to that channel.
+// Idempotent; `goxlr-channels --remove` deletes them.
+import CoreAudio
+import Foundation
+
+let PREFIX = "me.lexwebb.goxlr-channels::"
+let outputs: [(String, UInt32)] = [("System", 1), ("Game", 3), ("Chat", 5), ("Music", 7), ("Sample", 9)]
+let inputs: [(String, UInt32)] = [("Stream Mix", 1), ("Chat Mic", 3), ("Sampler", 5)]
+
+func addr(_ sel: AudioObjectPropertySelector, _ scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) -> AudioObjectPropertyAddress {
+  AudioObjectPropertyAddress(mSelector: sel, mScope: scope, mElement: kAudioObjectPropertyElementMain)
+}
+func str(_ id: AudioObjectID, _ sel: AudioObjectPropertySelector) -> String {
+  var a = addr(sel); var v: Unmanaged<CFString>?; var s = UInt32(MemoryLayout<CFString?>.size)
+  guard AudioObjectGetPropertyData(id, &a, 0, nil, &s, &v) == noErr, let r = v?.takeRetainedValue() else { return "" }
+  return r as String
+}
+func devices() -> [AudioObjectID] {
+  var a = addr(kAudioHardwarePropertyDevices); var s: UInt32 = 0
+  AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &a, 0, nil, &s)
+  var ids = [AudioObjectID](repeating: 0, count: Int(s) / 4)
+  AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &a, 0, nil, &s, &ids)
+  return ids
+}
+
+let existing = Dictionary(devices().map { (str($0, kAudioDevicePropertyDeviceUID), $0) }, uniquingKeysWith: { a, _ in a })
+
+if CommandLine.arguments.contains("--remove") {
+  for (uid, id) in existing where uid.hasPrefix(PREFIX) { AudioHardwareDestroyAggregateDevice(id); print("removed \(uid)") }
+  exit(0)
+}
+
+guard let goxlr = devices().first(where: { str($0, kAudioObjectPropertyName) == "GoXLRMini" }) else {
+  FileHandle.standardError.write("GoXLRMini not connected\n".data(using: .utf8)!); exit(1)
+}
+let goxlrUID = str(goxlr, kAudioDevicePropertyDeviceUID)
+
+func make(_ name: String, _ left: UInt32, _ scope: AudioObjectPropertyScope) {
+  let uid = PREFIX + name.replacingOccurrences(of: " ", with: "")
+  if existing[uid] != nil { print("exists  GoXLR \(name)"); return }
+  let desc: [String: Any] = [
+    kAudioAggregateDeviceNameKey: "GoXLR \(name)", kAudioAggregateDeviceUIDKey: uid,
+    kAudioAggregateDeviceSubDeviceListKey: [[kAudioSubDeviceUIDKey: goxlrUID]],
+    kAudioAggregateDeviceMainSubDeviceKey: goxlrUID,
+  ]
+  var id = AudioObjectID(0)
+  guard AudioHardwareCreateAggregateDevice(desc as CFDictionary, &id) == noErr else { print("FAILED  GoXLR \(name)"); return }
+  var a = addr(kAudioDevicePropertyPreferredChannelsForStereo, scope); var pair: [UInt32] = [left, left + 1]
+  let st = AudioObjectSetPropertyData(id, &a, 0, nil, UInt32(MemoryLayout<UInt32>.size * 2), &pair)
+  print(st == noErr ? "created GoXLR \(name) (ch \(left)/\(left + 1))" : "created GoXLR \(name), but channel pair failed: \(st)")
+}
+for (n, l) in outputs { make(n, l, kAudioObjectPropertyScopeOutput) }
+for (n, l) in inputs { make(n, l, kAudioObjectPropertyScopeInput) }
