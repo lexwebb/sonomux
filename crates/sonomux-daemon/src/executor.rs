@@ -1,6 +1,6 @@
 use crate::dbus_service::SharedDaemonState;
 use crate::state::StateStore;
-use sonomux_backend::PulseManager;
+use sonomux_backend::Backend;
 use sonomux_core::rules::Action;
 use sonomux_core::traits::HasHardwareVolume;
 use sonomux_device_goxlr::GoXLRClient;
@@ -33,8 +33,8 @@ impl<'a> ActionExecutor<'a> {
                     "Executing EnsureLoopback: source={} -> sink={} ({}ms)",
                     source, sink, latency_ms
                 );
-                if PulseManager::sink_exists(sink).await {
-                    match PulseManager::ensure_loopback(source, sink, *latency_ms).await {
+                if Backend::sink_exists(sink).await {
+                    match Backend::ensure_loopback(source, sink, *latency_ms).await {
                         Ok(id) => {
                             *self.current_loopback_id = Some(id);
                             let mut st = self.shared_state.lock().await;
@@ -50,9 +50,9 @@ impl<'a> ActionExecutor<'a> {
             Action::DestroyLoopback { source } => {
                 info!("Executing DestroyLoopback for source={}", source);
                 if let Some(id) = self.current_loopback_id.take() {
-                    let _ = PulseManager::unload_module(id).await;
-                } else if let Some(id) = PulseManager::find_loopback_module(source).await {
-                    let _ = PulseManager::unload_module(id).await;
+                    let _ = Backend::unload_module(id).await;
+                } else if let Some(id) = Backend::find_loopback_module(source).await {
+                    let _ = Backend::unload_module(id).await;
                 }
                 let mut st = self.shared_state.lock().await;
                 st.loopback_active = false;
@@ -179,7 +179,7 @@ impl<'a> ActionExecutor<'a> {
                 keep_off_apps,
             } => {
                 let keep_off: Vec<&str> = keep_off_apps.iter().map(|s| s.as_str()).collect();
-                if let Err(e) = PulseManager::enforce_surround_policies(
+                if let Err(e) = Backend::enforce_surround_policies(
                     surround_out,
                     surround_in,
                     game_sink,
@@ -207,10 +207,10 @@ impl<'a> ActionExecutor<'a> {
                     "Executing RouteStream: target app/binary='{}' -> '{}'",
                     app_or_binary, target_sink
                 );
-                if let Ok(streams) = PulseManager::get_active_streams().await {
+                if let Ok(streams) = Backend::get_active_streams().await {
                     for s in streams {
                         if s.app_name == *app_or_binary || s.binary == *app_or_binary {
-                            let _ = PulseManager::move_stream(s.index, target_sink).await;
+                            let _ = Backend::move_stream(s.index, target_sink).await;
                         }
                     }
                 }

@@ -4,7 +4,7 @@ mod state;
 
 use dbus_service::{SharedDaemonState, SonomuxDbusService};
 use executor::ActionExecutor;
-use sonomux_backend::PulseManager;
+use sonomux_backend::Backend;
 use sonomux_core::rules::{RuleContext, RuleEngine};
 use sonomux_core::traits::{AudioDevice, DeviceEvent, DeviceStatus};
 use sonomux_core::AppConfig;
@@ -14,7 +14,8 @@ use state::StateStore;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
+#[cfg(not(target_os = "macos"))]
 use zbus::connection::Builder;
 
 #[tokio::main]
@@ -51,6 +52,7 @@ async fn main() -> anyhow::Result<()> {
         game_volume: 85.0,
         chat_volume: 90.0,
         music_volume: 70.0,
+        mic_volume: 100.0,
         loopback_active: false,
     }));
 
@@ -65,6 +67,10 @@ async fn main() -> anyhow::Result<()> {
             tokio_handle: tokio::runtime::Handle::current(),
         };
 
+        #[cfg(target_os = "macos")]
+        tokio::spawn(serve_unix_socket(dbus_svc));
+
+        #[cfg(not(target_os = "macos"))]
         tokio::spawn(async move {
             match Builder::session() {
                 Ok(builder) => {
@@ -174,6 +180,9 @@ async fn main() -> anyhow::Result<()> {
                     if let Some(&v) = vols.get("Music") {
                         s.music_volume = (v as f64 / 255.0) * 100.0;
                     }
+                    if let Some(&v) = vols.get("Mic") {
+                        s.mic_volume = (v as f64 / 255.0) * 100.0;
+                    }
                 }
             }
 
@@ -181,7 +190,7 @@ async fn main() -> anyhow::Result<()> {
             _ = ticker.tick() => {
                 let current_cfg = config_shared.lock().await.clone();
                 let goxlr_up = goxlr.status().await == DeviceStatus::Active
-                    && PulseManager::source_exists(&current_cfg.devices.goxlr_mix_source).await;
+                    && Backend::source_exists(&current_cfg.devices.goxlr_mix_source).await;
 
                 {
                     let mut s = shared_state.lock().await;
@@ -190,16 +199,20 @@ async fn main() -> anyhow::Result<()> {
 
                 if goxlr_up {
                     if !goxlr_was_up {
-                        info!("GoXLR detected active! Applying sampler matrix routing...");
-                        if let Err(e) = goxlr.setup_sampler_routing().await {
-                            error!("Failed to configure GoXLR routing: {}", e);
+                        // The sampler mix only feeds the headset loopback, which macOS lacks so far.
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            info!("GoXLR detected active! Applying sampler matrix routing...");
+                            if let Err(e) = goxlr.setup_sampler_routing().await {
+                                tracing::error!("Failed to configure GoXLR routing: {}", e);
+                            }
                         }
                         goxlr_was_up = true;
                     }
 
                     // Enforce Virtual Surround Manager pinning
                     let keep_off: Vec<&str> = current_cfg.policies.keep_off_surround.iter().map(|s| s.as_str()).collect();
-                    if let Err(e) = PulseManager::enforce_surround_policies(
+                    if let Err(e) = Backend::enforce_surround_policies(
                         &current_cfg.policies.surround_out_node,
                         &current_cfg.policies.surround_in_node,
                         &current_cfg.devices.goxlr_game_sink,
@@ -211,7 +224,7 @@ async fn main() -> anyhow::Result<()> {
 
                     // Enforce intelligent stream classification & routing policies
                     if current_cfg.routing.enabled {
-                        if let Err(e) = PulseManager::enforce_stream_routing(
+                        if let Err(e) = Backend::enforce_stream_routing(
                             &current_cfg.routing,
                             &current_cfg.devices,
                             &current_cfg.policies,
@@ -242,7 +255,7 @@ async fn main() -> anyhow::Result<()> {
             _ = tokio::signal::ctrl_c() => {
                 info!("Shutdown signal (Ctrl+C) received. Cleaning up Sonomux daemon...");
                 if let Some(id) = current_loopback_id {
-                    let _ = PulseManager::unload_module(id).await;
+                    let _ = Backend::unload_module(id).await;
                 }
                 break;
             }
@@ -259,7 +272,7 @@ async fn main() -> anyhow::Result<()> {
             } => {
                 info!("Shutdown signal (SIGTERM) received. Cleaning up Sonomux daemon...");
                 if let Some(id) = current_loopback_id {
-                    let _ = PulseManager::unload_module(id).await;
+                    let _ = Backend::unload_module(id).await;
                 }
                 break;
             }
@@ -286,8 +299,8 @@ async fn evaluate_and_dispatch(
         s.battery_pct
     };
 
-    let headset_sink_present = PulseManager::sink_exists(&config.devices.headset_sink).await;
-    let goxlr_source_present = PulseManager::source_exists(&config.devices.goxlr_mix_source).await;
+    let headset_sink_present = Backend::sink_exists(&config.devices.headset_sink).await;
+    let goxlr_source_present = Backend::source_exists(&config.devices.goxlr_mix_source).await;
 
     let mut ctx = RuleContext::new()
         .with_device_status("headset", headset_status)
@@ -296,7 +309,7 @@ async fn evaluate_and_dispatch(
         .with_node(&config.devices.headset_sink, headset_sink_present)
         .with_node(&config.devices.goxlr_mix_source, goxlr_source_present);
 
-    if let Ok(streams) = PulseManager::get_active_streams().await {
+    if let Ok(streams) = Backend::get_active_streams().await {
         for s in streams {
             let cat = sonomux_core::AppClassifier::classify(&s, &config.routing.app_overrides);
             ctx = ctx.with_stream_category(&cat.to_string(), true);
@@ -316,5 +329,54 @@ async fn evaluate_and_dispatch(
             current_loopback_id,
         };
         executor.execute_actions(&actions).await;
+    }
+}
+
+/// macOS has no session bus: serve the D-Bus interface peer-to-peer, one connection per client.
+#[cfg(target_os = "macos")]
+async fn serve_unix_socket(svc: SonomuxDbusService) {
+    let path = sonomux_core::ipc::socket_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    // A stale socket from a previous run blocks bind.
+    let _ = std::fs::remove_file(&path);
+    let listener = match tokio::net::UnixListener::bind(&path) {
+        Ok(l) => l,
+        Err(e) => {
+            warn!("Could not bind IPC socket {}: {}", path.display(), e);
+            return;
+        }
+    };
+    info!("IPC service listening on {}", path.display());
+
+    loop {
+        let stream = match listener.accept().await.and_then(|(s, _)| s.into_std()) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("IPC accept error: {}", e);
+                continue;
+            }
+        };
+        let svc = svc.clone();
+        tokio::spawn(async move {
+            let conn = zbus::connection::Builder::async_io_unix_stream(stream)
+                .server(zbus::Guid::generate())
+                .map(|b| b.p2p())
+                .and_then(|b| b.serve_at(sonomux_core::ipc::OBJECT_PATH, svc));
+            match conn {
+                Ok(b) => match b.build().await {
+                    // zbus drives the connection; hold it until the client hangs up.
+                    // ponytail: 1s poll, swap for a close event if zbus grows one.
+                    Ok(conn) => {
+                        while !conn.is_closed() {
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+                        }
+                    }
+                    Err(e) => debug!("IPC client handshake failed: {}", e),
+                },
+                Err(e) => warn!("IPC connection setup error: {}", e),
+            }
+        });
     }
 }

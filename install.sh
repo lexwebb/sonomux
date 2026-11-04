@@ -14,6 +14,35 @@ echo "🎛️ Installing Sonomux..."
 echo "📦 Building release workspace..."
 cargo build --release --workspace
 
+# macOS: launchd agent instead of systemd/D-Bus/XDG desktop files.
+if [ "$(uname -s)" = "Darwin" ]; then
+  BIN_DIR="${HOME}/.local/bin"
+  AGENT_DIR="${HOME}/Library/LaunchAgents"
+  AGENT="${AGENT_DIR}/org.sonomux.sonomuxd.plist"
+  DOMAIN="gui/$(id -u)"
+  mkdir -p "${BIN_DIR}" "${AGENT_DIR}" "${HOME}/Library/Logs"
+
+  # Stop before copying so the running binary is never overwritten.
+  launchctl bootout "${DOMAIN}/org.sonomux.sonomuxd" 2>/dev/null || true
+
+  echo "🚀 Installing binaries to ${BIN_DIR}..."
+  install -m 755 target/release/sonomux target/release/sonomuxd target/release/sonomuxctl "${BIN_DIR}/"
+  install -m 755 dist/macos/goxlr-channels "${BIN_DIR}/goxlr-channels"
+
+  echo "🎚️ Creating per-channel GoXLR devices..."
+  "${BIN_DIR}/goxlr-channels" || echo "⚠️ goxlr-channels failed (is the GoXLR plugged in?). Re-run it later."
+
+  echo "⚙️ Configuring launchd agent..."
+  sed -e "s|@BIN_DIR@|${BIN_DIR}|g" -e "s|@LOG_FILE@|${HOME}/Library/Logs/sonomuxd.log|g" \
+    dist/launchd/org.sonomux.sonomuxd.plist > "${AGENT}"
+  launchctl bootstrap "${DOMAIN}" "${AGENT}"
+
+  echo ""
+  echo "✅ Sonomux installed and running (log: ~/Library/Logs/sonomuxd.log)."
+  echo "   Run 'sonomuxctl status' or launch 'sonomux' GUI to verify."
+  exit 0
+fi
+
 # 2. Ensure directories exist
 BIN_DIR="${HOME}/.local/bin"
 SYSTEMD_DIR="${HOME}/.config/systemd/user"

@@ -207,6 +207,7 @@ fn test_parse_downstream_target_index() {
     assert_eq!(not_found, None);
 }
 
+#[cfg(target_os = "linux")] // shells out to pactl
 #[tokio::test]
 async fn test_pulse_manager_loopback_and_routing_apis() {
     // Non-existent module health check
@@ -409,7 +410,8 @@ fn test_compute_routing_disabled_skips_all() {
     stream.app_name = "Spotify".to_string();
     stream.sink_name = devices.goxlr_system_sink.clone();
 
-    let moves = PulseManager::compute_routing_moves(&[stream], &routing_config, &devices, &policies, true);
+    let moves =
+        PulseManager::compute_routing_moves(&[stream], &routing_config, &devices, &policies, true);
     assert!(moves.is_empty());
 }
 

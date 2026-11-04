@@ -15,8 +15,9 @@ crates/
 ├── sonomux-core/            # Capability traits (AudioDevice, HasPresenceDetection, etc.),
 │                            # configuration schemas (config.rs), and declarative rule engine (rules.rs).
 │                            # Pure Rust domain logic; no direct hardware or I/O calls.
-├── sonomux-backend/         # PipeWire / PulseAudio graph manager (PulseManager).
-│                            # Handles loopback creation/destruction, stream pinning, and downstream volume traversal.
+├── sonomux-backend/         # Audio graph backends behind `sonomux_backend::Backend`:
+│                            # Linux: PipeWire / PulseAudio (PulseManager): loopbacks, stream pinning, volume traversal.
+│                            # macOS: CoreAudio (CoreAudioManager): device + playing-app queries; routing/loopback TODO.
 ├── sonomux-device-headset/  # Headset presence detection & battery telemetry via HID / headsetcontrol.
 │                            # State debouncing and event streaming (HeadsetMonitor).
 ├── sonomux-device-goxlr/    # GoXLR Mini hardware client (GoXlrClient) via Unix domain socket IPC (/tmp/goxlr.socket).
@@ -29,6 +30,8 @@ crates/
 
 dist/                        # Deployment, packaging, and integration assets:
 ├── systemd/                 # User systemd service (sonomuxd.service)
+├── launchd/                 # macOS LaunchAgent (org.sonomux.sonomuxd.plist; install.sh fills paths)
+├── macos/                   # goxlr-channels: per-channel GoXLR CoreAudio devices (GoXLR System, Chat, ...)
 ├── dbus/                    # Session D-Bus auto-activation service (org.sonomux.Daemon.service)
 ├── desktop/                 # XDG application desktop entry (org.sonomux.Sonomux.desktop)
 ├── omarchy/                 # Omarchy status bar polling script (sonomux-bar)
@@ -62,6 +65,7 @@ Always validate changes with these commands from the repository root:
 - Run `./scripts/coverage.sh` prior to concluding tasks to confirm that workspace coverage stays at or above 85% and that the `README.md` badge remains synchronized.
 
 ### 2. Process & Binary Safety
+- On macOS the daemon is a launchd agent (`launchctl print gui/$UID/org.sonomux.sonomuxd`), logging to `~/Library/Logs/sonomuxd.log`. `./install.sh` stops it before copying binaries.
 - The `sonomuxd` daemon runs as an active systemd user service (`systemctl --user status sonomuxd.service`).
 - **Never attempt to overwrite or compile binaries directly into `~/.local/bin/` while `sonomuxd` is running**; it will fail with `ETXTBUSY` ("Text file busy").
 - Use `./install.sh` (which handles stopping, copying, reloading, and restarting cleanly) or run:
@@ -72,6 +76,7 @@ Always validate changes with these commands from the repository root:
   ```
 
 ### 3. Tokio & D-Bus Threading (zbus)
+- macOS has no session bus. `sonomuxd` serves the same zbus interface peer-to-peer on a Unix socket (`~/.local/state/sonomux/sonomuxd.sock`). Clients must connect through `sonomux_core::ipc::connect()`, never `zbus::Connection::session()` directly.
 - `zbus::connection::Builder` spawns internal executor threads that are outside Tokio's ambient runtime context.
 - Calling async functions requiring a Tokio reactor (such as Tokio's `UnixStream::connect`) directly from a zbus method handler will panic with:
   `there is no reactor running, must be called from the context of a Tokio 1.x runtime`.

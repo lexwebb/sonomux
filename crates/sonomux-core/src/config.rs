@@ -86,6 +86,7 @@ pub struct DevicesConfig {
     pub debounce_count: usize,
 }
 
+#[cfg(not(target_os = "macos"))]
 impl Default for DevicesConfig {
     fn default() -> Self {
         Self {
@@ -104,6 +105,26 @@ impl Default for DevicesConfig {
                 .to_string(),
             goxlr_sample_sink: "alsa_output.usb-TC-Helicon_GoXLRMini-00.HiFi__Line3__sink"
                 .to_string(),
+            debounce_count: 2,
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Default for DevicesConfig {
+    /// CoreAudio device names (UIDs also work). The per-channel GoXLR devices come from
+    /// `dist/macos/goxlr-channels`, since GoXLR Utility's own aggregates fail on macOS 26.
+    fn default() -> Self {
+        Self {
+            goxlr_socket: "/tmp/goxlr.socket".to_string(),
+            headset_name: "SteelSeries Arctis Nova 7".to_string(),
+            headset_sink: "Arctis Nova 7".to_string(),
+            goxlr_mix_source: "GoXLR Sampler".to_string(),
+            goxlr_game_sink: "GoXLR Game".to_string(),
+            goxlr_system_sink: "GoXLR System".to_string(),
+            goxlr_chat_sink: "GoXLR Chat".to_string(),
+            goxlr_music_sink: "GoXLR Music".to_string(),
+            goxlr_sample_sink: "GoXLR Sample".to_string(),
             debounce_count: 2,
         }
     }

@@ -12,9 +12,11 @@ pub struct SharedDaemonState {
     pub game_volume: f64,
     pub chat_volume: f64,
     pub music_volume: f64,
+    pub mic_volume: f64,
     pub loopback_active: bool,
 }
 
+#[derive(Clone)]
 pub struct SonomuxDbusService {
     pub state: Arc<Mutex<SharedDaemonState>>,
     pub goxlr: sonomux_device_goxlr::GoXLRClient,
@@ -46,6 +48,7 @@ impl SonomuxDbusService {
         map.insert("Game".into(), s.game_volume);
         map.insert("Chat".into(), s.chat_volume);
         map.insert("Music".into(), s.music_volume);
+        map.insert("Mic".into(), s.mic_volume);
         map.insert("Headphones".into(), s.speaker_volume);
         map
     }
@@ -81,6 +84,7 @@ impl SonomuxDbusService {
                     "Game" => s.game_volume = volume_pct,
                     "Chat" => s.chat_volume = volume_pct,
                     "Music" => s.music_volume = volume_pct,
+                    "Mic" => s.mic_volume = volume_pct,
                     "Headphones" | "Speakers" => s.speaker_volume = volume_pct,
                     _ => {}
                 }
@@ -157,7 +161,7 @@ impl SonomuxDbusService {
                     .map(|s| s.as_str())
                     .collect();
 
-                let _ = sonomux_backend::PulseManager::enforce_surround_policies(
+                let _ = sonomux_backend::Backend::enforce_surround_policies(
                     &config.policies.surround_out_node,
                     &config.policies.surround_in_node,
                     &config.devices.goxlr_game_sink,
@@ -167,7 +171,7 @@ impl SonomuxDbusService {
                 .await;
 
                 if config.routing.enabled {
-                    sonomux_backend::PulseManager::enforce_stream_routing(
+                    sonomux_backend::Backend::enforce_stream_routing(
                         &config.routing,
                         &config.devices,
                         &config.policies,
@@ -184,7 +188,7 @@ impl SonomuxDbusService {
     /// Return live detected streams: (index, app_name, binary, category, current_sink)
     async fn get_routed_streams(&self) -> Vec<(u64, String, String, String, String)> {
         let config = self.config.lock().await.clone();
-        if let Ok(streams) = sonomux_backend::PulseManager::get_active_streams().await {
+        if let Ok(streams) = sonomux_backend::Backend::get_active_streams().await {
             streams
                 .into_iter()
                 .map(|s| {
@@ -213,7 +217,7 @@ impl SonomuxDbusService {
             let d = cfg.devices.clone();
             let p = cfg.policies.clone();
             self.tokio_handle.spawn(async move {
-                let _ = sonomux_backend::PulseManager::enforce_stream_routing(&r, &d, &p).await;
+                let _ = sonomux_backend::Backend::enforce_stream_routing(&r, &d, &p).await;
             });
         }
         Ok(())
@@ -229,7 +233,7 @@ impl SonomuxDbusService {
             let d = cfg.devices.clone();
             let p = cfg.policies.clone();
             self.tokio_handle.spawn(async move {
-                let _ = sonomux_backend::PulseManager::enforce_stream_routing(&r, &d, &p).await;
+                let _ = sonomux_backend::Backend::enforce_stream_routing(&r, &d, &p).await;
             });
         }
         Ok(())
