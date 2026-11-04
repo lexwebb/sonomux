@@ -112,19 +112,19 @@ impl Default for DevicesConfig {
 
 #[cfg(target_os = "macos")]
 impl Default for DevicesConfig {
-    /// CoreAudio device names (UIDs also work). sonomuxd creates the per-channel GoXLR devices
-    /// (see `sonomux_backend::coreaudio_channels`).
+    /// CoreAudio device names (UIDs also work). sonomuxd creates a device per named stereo pair of
+    /// multichannel hardware, named "<device> <pair>" (see `sonomux_backend::coreaudio_channels`).
     fn default() -> Self {
         Self {
             goxlr_socket: "/tmp/goxlr.socket".to_string(),
             headset_name: "SteelSeries Arctis Nova 7".to_string(),
             headset_sink: "Arctis Nova 7".to_string(),
-            goxlr_mix_source: "GoXLR Sampler".to_string(),
-            goxlr_game_sink: "GoXLR Game".to_string(),
-            goxlr_system_sink: "GoXLR System".to_string(),
-            goxlr_chat_sink: "GoXLR Chat".to_string(),
-            goxlr_music_sink: "GoXLR Music".to_string(),
-            goxlr_sample_sink: "GoXLR Sample".to_string(),
+            goxlr_mix_source: "GoXLRMini Sample Source Mix In".to_string(),
+            goxlr_game_sink: "GoXLRMini Game".to_string(),
+            goxlr_system_sink: "GoXLRMini System".to_string(),
+            goxlr_chat_sink: "GoXLRMini Chat".to_string(),
+            goxlr_music_sink: "GoXLRMini Music".to_string(),
+            goxlr_sample_sink: "GoXLRMini Sample Source Mix".to_string(),
             debounce_count: 2,
         }
     }

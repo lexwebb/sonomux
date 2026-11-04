@@ -24,6 +24,11 @@ if [ "$(uname -s)" = "Darwin" ]; then
 
   # Stop before copying so the running binary is never overwritten.
   launchctl bootout "${DOMAIN}/org.sonomux.sonomuxd" 2>/dev/null || true
+  # bootout returns before the job is gone; bootstrap fails (error 5) if it is still loaded.
+  for _ in $(seq 1 50); do
+    launchctl print "${DOMAIN}/org.sonomux.sonomuxd" >/dev/null 2>&1 || break
+    sleep 0.1
+  done
 
   echo "🚀 Installing binaries to ${BIN_DIR}..."
   install -m 755 target/release/sonomux target/release/sonomuxd target/release/sonomuxctl "${BIN_DIR}/"

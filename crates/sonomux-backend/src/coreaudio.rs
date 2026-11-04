@@ -73,7 +73,7 @@ const fn fourcc(s: &[u8; 4]) -> u32 {
 }
 
 const SYSTEM_OBJECT: u32 = 1;
-const SCOPE_GLOBAL: u32 = fourcc(b"glob");
+pub(crate) const SCOPE_GLOBAL: u32 = fourcc(b"glob");
 pub(crate) const SCOPE_INPUT: u32 = fourcc(b"inpt");
 pub(crate) const SCOPE_OUTPUT: u32 = fourcc(b"outp");
 const HW_DEVICES: u32 = fourcc(b"dev#");
@@ -121,12 +121,37 @@ fn get_vec<T: Copy + Default>(id: u32, selector: u32, scope: u32) -> Option<Vec<
     (st == 0).then_some(out)
 }
 
-fn get<T: Copy + Default>(id: u32, selector: u32, scope: u32) -> Option<T> {
+pub(crate) fn get<T: Copy + Default>(id: u32, selector: u32, scope: u32) -> Option<T> {
     get_vec::<T>(id, selector, scope)?.first().copied()
 }
 
 fn get_string(id: u32, selector: u32) -> Option<String> {
-    let cf = get::<usize>(id, selector, SCOPE_GLOBAL)? as *const c_void;
+    get_string_el(id, selector, SCOPE_GLOBAL, 0)
+}
+
+/// String property on a specific scope and element (e.g. a channel name).
+pub(crate) fn get_string_el(id: u32, selector: u32, scope: u32, element: u32) -> Option<String> {
+    let mut size = std::mem::size_of::<usize>() as u32;
+    let mut raw = 0usize;
+    let a = Address {
+        selector,
+        scope,
+        element,
+    };
+    let st = unsafe {
+        AudioObjectGetPropertyData(
+            id,
+            &a,
+            0,
+            std::ptr::null(),
+            &mut size,
+            (&mut raw as *mut usize).cast(),
+        )
+    };
+    if st != 0 {
+        return None;
+    }
+    let cf = raw as *const c_void;
     if cf.is_null() {
         return None;
     }
