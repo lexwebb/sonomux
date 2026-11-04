@@ -1,11 +1,14 @@
 mod dbus_service;
+mod executor;
 mod state;
 
 use dbus_service::{SharedDaemonState, SonomuxDbusService};
+use executor::ActionExecutor;
 use sonomux_backend::PulseManager;
+use sonomux_core::rules::{RuleContext, RuleEngine};
 use sonomux_core::traits::{AudioDevice, DeviceEvent, DeviceStatus};
 use sonomux_core::AppConfig;
-use sonomux_device_goxlr::{Channel, GoXLRClient};
+use sonomux_device_goxlr::GoXLRClient;
 use sonomux_device_headset::HeadsetMonitor;
 use state::StateStore;
 use std::sync::Arc;
@@ -86,7 +89,12 @@ async fn main() -> anyhow::Result<()> {
 
     let mut goxlr_was_up = false;
     let mut current_loopback_id: Option<u32> = None;
+    let mut rule_engine = RuleEngine::new(config.rules.clone());
 
+    info!(
+        "Rule engine loaded {} declarative rule(s).",
+        rule_engine.rules().len()
+    );
     info!("Sonomux daemon initialized and watching audio graph.");
 
     let mut ticker = tokio::time::interval(Duration::from_millis(config.daemon.check_interval_ms));
@@ -98,19 +106,39 @@ async fn main() -> anyhow::Result<()> {
                 match event {
                     DeviceEvent::StatusChanged { id: _, status } => {
                         info!("Headset status changed event: {:?}", status);
-                        handle_headset_transition(
-                            status,
+                        {
+                            let mut s = shared_state.lock().await;
+                            s.headset_active = status == DeviceStatus::Active;
+                            s.headset_status = format!("{:?}", status);
+                        }
+
+                        // Evaluate rules against updated context
+                        evaluate_and_dispatch(
+                            &headset,
                             &goxlr,
                             &config,
-                            &state_store,
                             &shared_state,
+                            &state_store,
+                            &mut rule_engine,
                             &mut current_loopback_id,
                         ).await;
                     }
                     DeviceEvent::BatteryChanged { id: _, percentage } => {
                         debug!("Headset battery: {}%", percentage);
-                        let mut s = shared_state.lock().await;
-                        s.battery_pct = percentage;
+                        {
+                            let mut s = shared_state.lock().await;
+                            s.battery_pct = percentage;
+                        }
+
+                        evaluate_and_dispatch(
+                            &headset,
+                            &goxlr,
+                            &config,
+                            &shared_state,
+                            &state_store,
+                            &mut rule_engine,
+                            &mut current_loopback_id,
+                        ).await;
                     }
                     _ => {}
                 }
@@ -147,22 +175,16 @@ async fn main() -> anyhow::Result<()> {
                         debug!("Surround policy enforcement: {}", e);
                     }
 
-                    // If headset is active, verify loopback health
-                    let headset_active = headset.status().await == DeviceStatus::Active;
-                    if headset_active && PulseManager::sink_exists(&config.devices.headset_sink).await {
-                        match PulseManager::ensure_loopback(
-                            &config.devices.goxlr_mix_source,
-                            &config.devices.headset_sink,
-                            config.policies.loopback_latency_ms,
-                        ).await {
-                            Ok(id) => {
-                                current_loopback_id = Some(id);
-                                let mut s = shared_state.lock().await;
-                                s.loopback_active = true;
-                            }
-                            Err(e) => warn!("Loopback check error: {}", e),
-                        }
-                    }
+                    // Evaluate rules on maintenance tick
+                    evaluate_and_dispatch(
+                        &headset,
+                        &goxlr,
+                        &config,
+                        &shared_state,
+                        &state_store,
+                        &mut rule_engine,
+                        &mut current_loopback_id,
+                    ).await;
                 } else {
                     if goxlr_was_up {
                         warn!("GoXLR disconnected or suspended.");
@@ -199,80 +221,44 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn handle_headset_transition(
-    status: DeviceStatus,
+async fn evaluate_and_dispatch(
+    headset: &HeadsetMonitor,
     goxlr: &GoXLRClient,
     config: &AppConfig,
-    state_store: &StateStore,
     shared_state: &Arc<Mutex<SharedDaemonState>>,
+    state_store: &StateStore,
+    rule_engine: &mut RuleEngine,
     current_loopback_id: &mut Option<u32>,
 ) {
-    let mut s = shared_state.lock().await;
-    match status {
-        DeviceStatus::Active => {
-            s.headset_status = "Active".into();
-            s.headset_active = true;
-            drop(s);
+    let headset_status = headset.status().await;
+    let goxlr_status = goxlr.status().await;
+    let battery = {
+        let s = shared_state.lock().await;
+        s.battery_pct
+    };
 
-            info!("🎧 Headset turned ON: Enabling feed and muting desk speakers...");
-            if PulseManager::sink_exists(&config.devices.headset_sink).await {
-                match PulseManager::ensure_loopback(
-                    &config.devices.goxlr_mix_source,
-                    &config.devices.headset_sink,
-                    config.policies.loopback_latency_ms,
-                )
-                .await
-                {
-                    Ok(id) => {
-                        *current_loopback_id = Some(id);
-                        let mut st = shared_state.lock().await;
-                        st.loopback_active = true;
-                    }
-                    Err(e) => error!("Failed to activate headset loopback: {}", e),
-                }
-            }
+    let headset_sink_present = PulseManager::sink_exists(&config.devices.headset_sink).await;
+    let goxlr_source_present = PulseManager::source_exists(&config.devices.goxlr_mix_source).await;
 
-            // Save speaker volume before zeroing
-            if let Ok(vol) = goxlr.get_headphones_volume().await {
-                if vol > 0 {
-                    state_store.save_speaker_volume(vol);
-                }
-            }
-            if let Err(e) = goxlr.set_volume_raw(Channel::Headphones, 0).await {
-                error!("Failed to mute GoXLR headphone jack: {}", e);
-            } else {
-                let mut st = shared_state.lock().await;
-                st.speaker_volume = 0.0;
-            }
-        }
-        DeviceStatus::Standby | DeviceStatus::Disconnected => {
-            s.headset_status = if status == DeviceStatus::Standby {
-                "Standby".into()
-            } else {
-                "Disconnected".into()
-            };
-            s.headset_active = false;
-            s.loopback_active = false;
-            drop(s);
+    let ctx = RuleContext::new()
+        .with_device_status("headset", headset_status)
+        .with_device_status("goxlr", goxlr_status)
+        .with_device_battery("headset", battery)
+        .with_node(&config.devices.headset_sink, headset_sink_present)
+        .with_node(&config.devices.goxlr_mix_source, goxlr_source_present);
 
-            info!("🔊 Headset turned OFF: Disabling feed and restoring desk speakers...");
-            if let Some(id) = current_loopback_id.take() {
-                let _ = PulseManager::unload_module(id).await;
-            } else if let Some(id) =
-                PulseManager::find_loopback_module(&config.devices.goxlr_mix_source).await
-            {
-                let _ = PulseManager::unload_module(id).await;
-            }
-
-            // Restore previous speaker volume
-            let restore_vol = state_store.load_speaker_volume().unwrap_or(255);
-            info!("Restoring GoXLR speaker volume to {}", restore_vol);
-            if let Err(e) = goxlr.set_volume_raw(Channel::Headphones, restore_vol).await {
-                error!("Failed to restore GoXLR headphone volume: {}", e);
-            } else {
-                let mut st = shared_state.lock().await;
-                st.speaker_volume = (restore_vol as f64 / 255.0) * 100.0;
-            }
-        }
+    let actions = rule_engine.evaluate(&ctx);
+    if !actions.is_empty() {
+        debug!(
+            "Rule engine generated {} action(s) to execute",
+            actions.len()
+        );
+        let mut executor = ActionExecutor {
+            goxlr,
+            state_store,
+            shared_state,
+            current_loopback_id,
+        };
+        executor.execute_actions(&actions).await;
     }
 }

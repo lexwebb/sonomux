@@ -1,3 +1,4 @@
+use crate::rules::{default_rules, Rule};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,7 +15,7 @@ pub enum ConfigError {
     Serialize(#[from] toml::ser::Error),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     #[serde(default)]
     pub daemon: DaemonConfig,
@@ -22,6 +23,19 @@ pub struct AppConfig {
     pub devices: DevicesConfig,
     #[serde(default)]
     pub policies: PoliciesConfig,
+    #[serde(default = "default_rules")]
+    pub rules: Vec<Rule>,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            daemon: DaemonConfig::default(),
+            devices: DevicesConfig::default(),
+            policies: PoliciesConfig::default(),
+            rules: default_rules(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
