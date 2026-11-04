@@ -1,23 +1,32 @@
-//! Per-pair CoreAudio devices for multichannel hardware.
+//! Per-function CoreAudio devices for multichannel hardware.
 //!
 //! macOS shows a mixer like the GoXLR Mini as one device with many channels (10 out, 21 in).
-//! Apps that pick a device expect stereo, so every named stereo pair on such a device gets its
-//! own aggregate device wrapping the hardware, with its preferred stereo pair set to that pair.
+//! Apps that pick a device expect stereo, so sonomuxd splits such hardware into aggregate
+//! devices, one per named stereo pair, each with its preferred stereo pairs set.
 //!
-//! Pairs come from the hardware's own channel names: consecutive channels named "X L" / "X R"
-//! become a device "<device> X". Devices with unnamed channels, surround layouts (no L/R pairs),
-//! fewer than two pairs, and virtual or aggregate devices are left alone.
+//! An aggregate always carries every input and output channel of the hardware, so each device
+//! shows up in both the Output and Input lists. To make both directions meaningful, each output
+//! pair is joined with its matching input pair by name:
+//!   1. an input whose name starts with the output's name ("Chat" -> "Chat Mic Mix"), else
+//!   2. an input with exactly the same name ("System" -> the "System" return).
+//!
+//! Inputs with no matching output are only created when `include_unpaired_inputs` is set,
+//! since they would sit in the Output list playing to channels 1/2.
+//!
+//! Pairs come from the hardware's own channel names: consecutive channels named "X L" / "X R".
+//! Devices with unnamed channels, surround layouts (no L/R pairs), a single pair, and virtual or
+//! aggregate devices are left alone.
 
 use crate::coreaudio::{
-    get, get_string_el, set, CoreAudioManager, DEV_PREFERRED_STEREO, SCOPE_GLOBAL, SCOPE_INPUT,
-    SCOPE_OUTPUT,
+    get, get_string, get_string_el, set, CoreAudioManager, DEV_PREFERRED_STEREO, SCOPE_GLOBAL,
+    SCOPE_INPUT, SCOPE_OUTPUT,
 };
 use crate::coreaudio_tap::{check, dict, obj};
 use crate::BackendError;
 use objc2_core_audio::{
     kAudioAggregateDeviceMainSubDeviceKey, kAudioAggregateDeviceNameKey,
     kAudioAggregateDeviceSubDeviceListKey, kAudioAggregateDeviceUIDKey, kAudioSubDeviceUIDKey,
-    AudioHardwareCreateAggregateDevice,
+    AudioHardwareCreateAggregateDevice, AudioHardwareDestroyAggregateDevice,
 };
 use objc2_core_foundation::CFDictionary;
 use objc2_foundation::{NSArray, NSString};
@@ -29,19 +38,21 @@ const ELEMENT_NAME: u32 = u32::from_be_bytes(*b"lchn");
 const TRANSPORT: u32 = u32::from_be_bytes(*b"tran");
 const TRANSPORT_AGGREGATE: u32 = u32::from_be_bytes(*b"grup");
 const TRANSPORT_VIRTUAL: u32 = u32::from_be_bytes(*b"virt");
+const MAIN_SUB_DEVICE: u32 = u32::from_be_bytes(*b"amst");
 /// Upper bound when probing channel names.
 const MAX_CHANNELS: u32 = 64;
 
-/// A stereo pair to expose as its own device.
+/// One device to expose: an output pair, an input pair, or both.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Pair {
+pub struct Split {
     /// Display name, e.g. "GoXLRMini Chat".
     pub name: String,
-    /// Stable UID derived from the hardware UID, direction and first channel.
+    /// Stable UID derived from the hardware UID and the channel pairs.
     pub uid: String,
-    /// First channel, 1-based.
-    pub first: u32,
-    pub input: bool,
+    /// First output channel, 1-based.
+    pub output: Option<u32>,
+    /// First input channel, 1-based.
+    pub input: Option<u32>,
 }
 
 /// Remove the L/R marker from a channel name: "Chat L" -> "Chat", "Mic L (processed)" ->
@@ -74,55 +85,64 @@ pub fn find_pairs(names: &[String]) -> Vec<(String, u32)> {
         .collect()
 }
 
-/// Plan the per-pair devices for one physical device from its channel names.
-/// Pure, so the naming rules are testable without hardware.
-pub fn plan_pairs(
+/// Plan the devices for one physical device from its channel names.
+/// Pure, so the pairing and naming rules are testable without hardware.
+pub fn plan(
     device_name: &str,
     device_uid: &str,
     outs: &[String],
     ins: &[String],
-) -> Vec<Pair> {
-    let out_pairs = find_pairs(outs);
-    let in_pairs = find_pairs(ins);
-    // A single pair is already a stereo device; nothing to split.
-    let worth = |p: &Vec<(String, u32)>| p.len() >= 2;
-
+    include_unpaired_inputs: bool,
+) -> Vec<Split> {
     // Drop a vendor prefix the hardware repeats, e.g. "GoXLR-Music" on device "GoXLRMini".
-    let tidy = |s: &str| -> String {
+    let tidy = |(s, first): (String, u32)| -> (String, u32) {
         match s.split_once('-') {
-            Some((pre, rest)) if !pre.is_empty() && device_name.starts_with(pre) => rest.into(),
-            _ => s.into(),
+            Some((pre, rest)) if !pre.is_empty() && device_name.starts_with(pre) => {
+                (rest.to_string(), first)
+            }
+            _ => (s, first),
         }
     };
-    let out_names: Vec<String> = out_pairs.iter().map(|(s, _)| tidy(s)).collect();
+    let out_pairs: Vec<_> = find_pairs(outs).into_iter().map(tidy).collect();
+    let mut in_pairs: Vec<_> = find_pairs(ins).into_iter().map(tidy).collect();
+    // A single pair in total is already a stereo device; nothing to split.
+    if out_pairs.len() + in_pairs.len() < 2 {
+        return Vec::new();
+    }
 
-    let mut plan = Vec::new();
-    if worth(&out_pairs) {
-        for ((_, first), label) in out_pairs.iter().zip(&out_names) {
-            plan.push(Pair {
-                name: format!("{} {}", device_name, label),
-                uid: format!("{}o{}::{}", UID_PREFIX, first, device_uid),
-                first: *first,
-                input: false,
-            });
-        }
+    let mut splits = Vec::new();
+    for (label, out_first) in &out_pairs {
+        let prefix = format!("{} ", label);
+        let pos = in_pairs
+            .iter()
+            .position(|(n, _)| n.starts_with(&prefix))
+            .or_else(|| in_pairs.iter().position(|(n, _)| n == label));
+        let input = pos.map(|i| in_pairs.remove(i).1);
+        splits.push(Split {
+            name: format!("{} {}", device_name, label),
+            uid: match input {
+                Some(i) => format!("{}o{}i{}::{}", UID_PREFIX, out_first, i, device_uid),
+                None => format!("{}o{}::{}", UID_PREFIX, out_first, device_uid),
+            },
+            output: Some(*out_first),
+            input,
+        });
     }
-    if worth(&in_pairs) {
-        for (s, first) in &in_pairs {
-            let mut label = tidy(s);
-            // Every pair device carries both directions, so names must not collide.
-            if out_names.contains(&label) {
-                label.push_str(" In");
+    if include_unpaired_inputs {
+        for (label, in_first) in in_pairs {
+            let mut name = format!("{} {}", device_name, label);
+            if splits.iter().any(|s| s.name == name) {
+                name.push_str(" In");
             }
-            plan.push(Pair {
-                name: format!("{} {}", device_name, label),
-                uid: format!("{}i{}::{}", UID_PREFIX, first, device_uid),
-                first: *first,
-                input: true,
+            splits.push(Split {
+                name,
+                uid: format!("{}i{}::{}", UID_PREFIX, in_first, device_uid),
+                output: None,
+                input: Some(in_first),
             });
         }
     }
-    plan
+    splits
 }
 
 fn channel_names(id: u32, scope: u32) -> Vec<String> {
@@ -131,9 +151,10 @@ fn channel_names(id: u32, scope: u32) -> Vec<String> {
         .collect()
 }
 
-/// Create any missing per-pair devices for every connected physical multichannel device.
-/// Returns the names created. Existing devices (matched by UID) are left untouched.
-pub fn ensure_pair_devices() -> Vec<String> {
+/// Bring the split devices for every connected physical multichannel device in line with the
+/// plan: create missing ones and remove our own that no longer match (e.g. after a rule or
+/// config change). Returns the names created.
+pub fn ensure_split_devices(include_unpaired_inputs: bool) -> Vec<String> {
     let devices = CoreAudioManager::devices();
     let mut created = Vec::new();
     for hw in &devices {
@@ -141,38 +162,61 @@ pub fn ensure_pair_devices() -> Vec<String> {
         if transport == TRANSPORT_AGGREGATE || transport == TRANSPORT_VIRTUAL {
             continue;
         }
-        let plan = plan_pairs(
+        let planned = plan(
             &hw.name,
             &hw.uid,
             &channel_names(hw.id, SCOPE_OUTPUT),
             &channel_names(hw.id, SCOPE_INPUT),
+            include_unpaired_inputs,
         );
-        for pair in plan {
-            if devices.iter().any(|d| d.uid == pair.uid) {
+
+        // Ours for this hardware but no longer planned: remove.
+        for d in &devices {
+            let ours = d.uid.starts_with(UID_PREFIX) && d.uid.ends_with(&format!("::{}", hw.uid));
+            if ours && !planned.iter().any(|s| s.uid == d.uid) {
+                let st = unsafe { AudioHardwareDestroyAggregateDevice(d.id) };
+                info!(
+                    "Removed stale CoreAudio device '{}' (status {})",
+                    d.name, st
+                );
+            }
+        }
+
+        for split in planned {
+            if devices.iter().any(|d| d.uid == split.uid) {
                 continue;
             }
-            match create(&hw.uid, &pair) {
+            match create(&hw.uid, &split) {
                 Ok(()) => {
                     info!(
-                        "Created CoreAudio device '{}' ({} ch {}/{})",
-                        pair.name,
-                        if pair.input { "in" } else { "out" },
-                        pair.first,
-                        pair.first + 1
+                        "Created CoreAudio device '{}' (out {:?}, in {:?})",
+                        split.name, split.output, split.input
                     );
-                    created.push(pair.name);
+                    created.push(split.name);
                 }
-                Err(e) => warn!("Could not create '{}': {}", pair.name, e),
+                Err(e) => warn!("Could not create '{}': {}", split.name, e),
             }
         }
     }
     created
 }
 
-fn create(hw_uid: &str, pair: &Pair) -> Result<(), BackendError> {
+/// The hardware device and first output channel behind one of our split devices, if it is one.
+/// Lets routing write to the physical device directly (macOS can't nest aggregates).
+pub fn resolve_output(device_id: u32) -> Option<(String, u32)> {
+    let uid = get_string(device_id, u32::from_be_bytes(*b"uid "))?;
+    let rest = uid.strip_prefix(UID_PREFIX)?;
+    let (pairs, hw_uid) = rest.split_once("::")?;
+    let first: u32 = pairs.strip_prefix('o')?.split('i').next()?.parse().ok()?;
+    // Prefer the live main sub-device; fall back to the UID's record of it.
+    let main = get_string(device_id, MAIN_SUB_DEVICE).unwrap_or_else(|| hw_uid.to_string());
+    Some((main, first))
+}
+
+fn create(hw_uid: &str, split: &Split) -> Result<(), BackendError> {
     let hw = NSString::from_str(hw_uid);
-    let name = NSString::from_str(&pair.name);
-    let uid = NSString::from_str(&pair.uid);
+    let name = NSString::from_str(&split.name);
+    let uid = NSString::from_str(&split.uid);
     let subs = NSArray::from_retained_slice(&[dict(&[(kAudioSubDeviceUIDKey, obj(&hw))])]);
     let desc = dict(&[
         (kAudioAggregateDeviceNameKey, obj(&name)),
@@ -186,20 +230,15 @@ fn create(hw_uid: &str, pair: &Pair) -> Result<(), BackendError> {
         unsafe { AudioHardwareCreateAggregateDevice(cf, NonNull::from(&mut id)) },
         "AudioHardwareCreateAggregateDevice",
     )?;
-    let scope = if pair.input {
-        SCOPE_INPUT
-    } else {
-        SCOPE_OUTPUT
-    };
-    check(
-        set(
-            id,
-            DEV_PREFERRED_STEREO,
-            scope,
-            &[pair.first, pair.first + 1],
-        ),
-        "set preferred stereo pair",
-    )
+    for (first, scope) in [(split.output, SCOPE_OUTPUT), (split.input, SCOPE_INPUT)] {
+        if let Some(f) = first {
+            check(
+                set(id, DEV_PREFERRED_STEREO, scope, &[f, f + 1]),
+                "set preferred stereo pair",
+            )?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -210,8 +249,7 @@ mod tests {
         v.iter().map(|s| s.to_string()).collect()
     }
 
-    #[test]
-    fn goxlr_mini_layout() {
+    fn goxlr() -> (Vec<String>, Vec<String>) {
         let outs = names(&[
             "System L",
             "System R",
@@ -235,41 +273,72 @@ mod tests {
             "GoXLR-Mic R (processed)",
             "GoXLR-System L",
             "GoXLR-System R",
+            "GoXLR-Game L",
+            "GoXLR-Game R",
+            "GoXLR-Chat L",
+            "GoXLR-Chat R",
+            "GoXLR-Music L",
+            "GoXLR-Music R",
+            "GoXLR-Line In L",
+            "GoXLR-Line In R",
             "GoXLR-Dry Mic (unprocessed)",
         ]);
-        let plan = plan_pairs("GoXLRMini", "HW", &outs, &ins);
-        let got: Vec<(&str, u32, bool)> = plan
+        (outs, ins)
+    }
+
+    #[test]
+    fn goxlr_mini_joins_outputs_with_matching_inputs() {
+        let (outs, ins) = goxlr();
+        let p = plan("GoXLRMini", "HW", &outs, &ins, false);
+        let got: Vec<(&str, Option<u32>, Option<u32>)> = p
             .iter()
-            .map(|p| (p.name.as_str(), p.first, p.input))
+            .map(|s| (s.name.as_str(), s.output, s.input))
             .collect();
         assert_eq!(
             got,
             [
-                ("GoXLRMini System", 1, false),
-                ("GoXLRMini Game", 3, false),
-                ("GoXLRMini Chat", 5, false),
-                ("GoXLRMini Music", 7, false),
-                ("GoXLRMini Sample Source Mix", 9, false),
-                ("GoXLRMini Broadcast Stream Mix", 1, true),
-                ("GoXLRMini Chat Mic Mix", 3, true),
-                ("GoXLRMini Sample Source Mix In", 5, true),
-                ("GoXLRMini Mic (processed)", 7, true),
-                ("GoXLRMini System In", 9, true),
+                ("GoXLRMini System", Some(1), Some(9)), // System return
+                ("GoXLRMini Game", Some(3), Some(11)),  // Game return
+                ("GoXLRMini Chat", Some(5), Some(3)),   // Chat Mic Mix beats the Chat return
+                ("GoXLRMini Music", Some(7), Some(15)), // Music return
+                ("GoXLRMini Sample Source Mix", Some(9), Some(5)),
             ]
         );
-        assert_eq!(plan[2].uid, "org.sonomux.split::o5::HW");
-        assert_eq!(plan[6].uid, "org.sonomux.split::i3::HW");
+        assert_eq!(p[2].uid, "org.sonomux.split::o5i3::HW");
+    }
+
+    #[test]
+    fn unpaired_inputs_only_when_asked() {
+        let (outs, ins) = goxlr();
+        let p = plan("GoXLRMini", "HW", &outs, &ins, true);
+        let extra: Vec<&str> = p[5..].iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(
+            extra,
+            [
+                "GoXLRMini Broadcast Stream Mix",
+                "GoXLRMini Mic (processed)",
+                "GoXLRMini Chat In",
+                "GoXLRMini Line In",
+            ]
+        );
+        assert_eq!(p[5].output, None);
+        assert_eq!(p[5].uid, "org.sonomux.split::i1::HW");
     }
 
     #[test]
     fn leaves_stereo_and_surround_alone() {
-        // Plain stereo: one pair, nothing to split.
-        assert!(plan_pairs("Speakers", "U", &names(&["Left", "Right"]), &[]).is_empty());
-        assert!(plan_pairs("Amp", "U", &names(&["Out L", "Out R"]), &[]).is_empty());
-        // Surround: no "X L"/"X R" pairs.
+        assert!(plan("Speakers", "U", &names(&["Left", "Right"]), &[], true).is_empty());
+        assert!(plan("Amp", "U", &names(&["Out L", "Out R"]), &[], true).is_empty());
         let surround = names(&["Front Left", "Front Right", "Center", "LFE"]);
-        assert!(plan_pairs("HDMI", "U", &surround, &[]).is_empty());
-        // Misaligned pairs (R before L) don't count.
+        assert!(plan("HDMI", "U", &surround, &[], true).is_empty());
         assert!(find_pairs(&names(&["A R", "A L", "B R", "B L"])).is_empty());
+    }
+
+    #[test]
+    fn output_only_interface_splits_outputs() {
+        let outs = names(&["Main L", "Main R", "Phones L", "Phones R"]);
+        let p = plan("Interface", "U", &outs, &[], false);
+        assert_eq!(p.len(), 2);
+        assert_eq!((p[1].name.as_str(), p[1].input), ("Interface Phones", None));
     }
 }

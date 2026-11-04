@@ -194,7 +194,9 @@ async fn main() -> anyhow::Result<()> {
                 // macOS shows multichannel hardware (e.g. the GoXLR) as one device; keep a
                 // device per named stereo pair so apps and routing can target each channel.
                 #[cfg(target_os = "macos")]
-                sonomux_backend::coreaudio_channels::ensure_pair_devices();
+                sonomux_backend::coreaudio_channels::ensure_split_devices(
+                    current_cfg.devices.split_unpaired_inputs,
+                );
 
                 let goxlr_up = goxlr.status().await == DeviceStatus::Active
                     && Backend::source_exists(&current_cfg.devices.goxlr_mix_source).await;

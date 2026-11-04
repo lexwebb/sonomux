@@ -84,6 +84,9 @@ pub struct DevicesConfig {
     pub goxlr_sample_sink: String,
     /// Number of consecutive matching reads before confirming headset state transition.
     pub debounce_count: usize,
+    /// macOS: also create devices for input pairs that have no matching output (e.g. GoXLR
+    /// "Broadcast Stream Mix"). Off by default: they also show in the Output list.
+    pub split_unpaired_inputs: bool,
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -106,6 +109,7 @@ impl Default for DevicesConfig {
             goxlr_sample_sink: "alsa_output.usb-TC-Helicon_GoXLRMini-00.HiFi__Line3__sink"
                 .to_string(),
             debounce_count: 2,
+            split_unpaired_inputs: false,
         }
     }
 }
@@ -119,13 +123,14 @@ impl Default for DevicesConfig {
             goxlr_socket: "/tmp/goxlr.socket".to_string(),
             headset_name: "SteelSeries Arctis Nova 7".to_string(),
             headset_sink: "Arctis Nova 7".to_string(),
-            goxlr_mix_source: "GoXLRMini Sample Source Mix In".to_string(),
+            goxlr_mix_source: "GoXLRMini Sample Source Mix".to_string(),
             goxlr_game_sink: "GoXLRMini Game".to_string(),
             goxlr_system_sink: "GoXLRMini System".to_string(),
             goxlr_chat_sink: "GoXLRMini Chat".to_string(),
             goxlr_music_sink: "GoXLRMini Music".to_string(),
             goxlr_sample_sink: "GoXLRMini Sample Source Mix".to_string(),
             debounce_count: 2,
+            split_unpaired_inputs: false,
         }
     }
 }

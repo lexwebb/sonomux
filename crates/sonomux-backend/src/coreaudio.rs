@@ -125,7 +125,7 @@ pub(crate) fn get<T: Copy + Default>(id: u32, selector: u32, scope: u32) -> Opti
     get_vec::<T>(id, selector, scope)?.first().copied()
 }
 
-fn get_string(id: u32, selector: u32) -> Option<String> {
+pub(crate) fn get_string(id: u32, selector: u32) -> Option<String> {
     get_string_el(id, selector, SCOPE_GLOBAL, 0)
 }
 
