@@ -27,6 +27,8 @@ crates/
 │                            # and hosts the session D-Bus interface (org.sonomux.Daemon via zbus).
 ├── sonomux-gui/             # Native Slint GUI (sonomux). Real-time fader control, battery indicators,
 │                            # mute toggles, and live D-Bus connection badge.
+├── sonomux-tray/            # Menu bar extra (macOS, AppKit) / tray icon (Linux, StatusNotifierItem).
+│                            # Mirrors the Omarchy widget; status text comes from sonomux_core::status.
 └── sonomux-cli/             # CLI controller (sonomuxctl). Interacts with sonomuxd via D-Bus IPC.
 
 dist/                        # Deployment, packaging, and integration assets:

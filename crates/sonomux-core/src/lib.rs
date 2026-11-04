@@ -2,6 +2,7 @@ pub mod classification;
 pub mod config;
 pub mod ipc;
 pub mod rules;
+pub mod status;
 pub mod traits;
 
 pub use classification::{group_apps, AppCategory, AppClassifier, AppEntry, StreamInfo};

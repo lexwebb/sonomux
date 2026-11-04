@@ -1,0 +1,14 @@
+[Unit]
+Description=Sonomux tray icon
+Documentation=https://github.com/lexwebb/sonomux
+PartOf=graphical-session.target
+After=graphical-session.target sonomuxd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/sonomux-tray
+Restart=on-failure
+RestartSec=3s
+
+[Install]
+WantedBy=graphical-session.target
