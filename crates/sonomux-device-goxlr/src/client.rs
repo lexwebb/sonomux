@@ -230,6 +230,36 @@ impl GoXLRClient {
         Ok(mixer.levels.volumes.clone())
     }
 
+    /// Mute state per fader-assigned channel.
+    pub async fn get_channel_mutes(
+        &self,
+    ) -> Result<std::collections::HashMap<String, bool>, DeviceError> {
+        Ok(self.mixer().await?.channel_mutes())
+    }
+
+    /// Mute or unmute a channel through the fader it is on, keeping its volume.
+    /// Channels without a fader can't be muted on the GoXLR.
+    pub async fn set_channel_muted(&self, channel: &str, muted: bool) -> Result<(), DeviceError> {
+        let fader = self
+            .mixer()
+            .await?
+            .fader_of(channel)
+            .ok_or_else(|| DeviceError::NotFound(format!("{} is not on a fader", channel)))?;
+        let state = if muted { "MutedToAll" } else { "Unmuted" };
+        self.send_command(serde_json::json!({ "SetFaderMuteState": [fader, state] }))
+            .await
+    }
+
+    async fn mixer(&self) -> Result<crate::types::MixerData, DeviceError> {
+        let status = self.get_status().await?;
+        let serial = self.get_serial().await?;
+        status
+            .mixers
+            .get(&serial)
+            .cloned()
+            .ok_or_else(|| DeviceError::NotFound(format!("Mixer {} not in status", serial)))
+    }
+
     /// Channels on the physical faders, left to right (A, B, C, D).
     pub async fn get_fader_channels(&self) -> Result<Vec<String>, DeviceError> {
         let status = self.get_status().await?;

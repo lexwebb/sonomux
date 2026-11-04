@@ -1,6 +1,10 @@
 use sonomux_core::config::*;
 use std::env;
 use std::fs;
+use std::sync::Mutex;
+
+/// Tests that change HOME / XDG_CONFIG_HOME take this, so they don't race each other.
+static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 fn test_default_config_values() {
@@ -102,6 +106,7 @@ fn test_partial_toml_uses_defaults() {
 
 #[test]
 fn test_load_or_create_generates_file() {
+    let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let temp_dir = env::temp_dir().join(format!("sonomux-test-{}", std::process::id()));
     let _ = fs::remove_dir_all(&temp_dir);
 
@@ -131,6 +136,7 @@ fn test_load_or_create_generates_file() {
 
 #[test]
 fn test_default_config_path_fallback() {
+    let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let temp_home = env::temp_dir().join(format!("sonomux-home-{}", std::process::id()));
     unsafe {
         env::remove_var("XDG_CONFIG_HOME");

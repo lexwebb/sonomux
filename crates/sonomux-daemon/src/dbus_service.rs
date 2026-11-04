@@ -247,6 +247,179 @@ impl SonomuxDbusService {
         Ok(())
     }
 
+    /// Apps for the routing list: (name, override key, category, override target or "", playing).
+    async fn get_apps(&self) -> Vec<(String, String, String, String, bool)> {
+        let overrides = self.config.lock().await.routing.app_overrides.clone();
+        let streams = self
+            .tokio_handle
+            .spawn(async { sonomux_backend::Backend::list_streams().await })
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+            .unwrap_or_default();
+        sonomux_core::group_apps(&streams, &overrides)
+            .into_iter()
+            // Idle background apps that would stay on System anyway are just noise.
+            .filter(|a| {
+                a.playing
+                    || a.category != sonomux_core::AppCategory::System
+                    || overrides.contains_key(&a.id)
+            })
+            .map(|a| {
+                let target = overrides.get(&a.id).cloned().unwrap_or_default();
+                (a.name, a.id, a.category.to_string(), target, a.playing)
+            })
+            .collect()
+    }
+
+    /// Pin an app (by override key) to a channel, or "" to go back to its category's channel.
+    async fn set_app_override(&self, id: String, target: String) -> zbus::fdo::Result<()> {
+        let mut cfg = self.config.lock().await;
+        if target.is_empty() {
+            cfg.routing.app_overrides.remove(&id);
+        } else {
+            cfg.routing.app_overrides.insert(id, target);
+        }
+        let _ = cfg.save();
+        let (r, d, p) = (
+            cfg.routing.clone(),
+            cfg.devices.clone(),
+            cfg.policies.clone(),
+        );
+        self.tokio_handle.spawn(async move {
+            let _ = sonomux_backend::Backend::enforce_stream_routing(&r, &d, &p).await;
+        });
+        Ok(())
+    }
+
+    /// Mute state of each channel that sits on a GoXLR fader.
+    async fn get_channel_mutes(&self) -> std::collections::HashMap<String, bool> {
+        let goxlr = self.goxlr.clone();
+        self.tokio_handle
+            .spawn(async move { goxlr.get_channel_mutes().await.unwrap_or_default() })
+            .await
+            .unwrap_or_default()
+    }
+
+    /// Mute or unmute a channel through its fader, keeping its volume.
+    async fn set_channel_muted(&self, channel: String, muted: bool) -> zbus::fdo::Result<()> {
+        let goxlr = self.goxlr.clone();
+        self.tokio_handle
+            .spawn(async move { goxlr.set_channel_muted(&channel, muted).await })
+            .await
+            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?
+            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+    }
+
+    /// Selectable devices and the current defaults: (outputs, inputs, default out, default in).
+    /// Empty on Linux, where PipeWire manages devices.
+    async fn get_audio_devices(&self) -> (Vec<String>, Vec<String>, String, String) {
+        #[cfg(target_os = "macos")]
+        {
+            use sonomux_backend::coreaudio::CoreAudioManager as Ca;
+            let devs = Ca::devices();
+            let names = |input: bool| {
+                devs.iter()
+                    .filter(|d| if input { d.has_input } else { d.has_output })
+                    .map(|d| d.name.clone())
+                    .collect::<Vec<_>>()
+            };
+            let name_of = |input: bool| {
+                Ca::default_device(input)
+                    .map(|d| d.name)
+                    .unwrap_or_default()
+            };
+            (names(false), names(true), name_of(false), name_of(true))
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            (Vec::new(), Vec::new(), String::new(), String::new())
+        }
+    }
+
+    /// (keep the configured defaults, create devices for unpaired inputs).
+    async fn get_device_settings(&self) -> (bool, bool) {
+        let cfg = self.config.lock().await;
+        (
+            cfg.devices.default_output.is_some() || cfg.devices.default_input.is_some(),
+            cfg.devices.split_unpaired_inputs,
+        )
+    }
+
+    /// Make a device the default output or input. When defaults are kept, also remember it.
+    async fn set_default_device(&self, name: String, input: bool) -> zbus::fdo::Result<()> {
+        #[cfg(target_os = "macos")]
+        sonomux_backend::coreaudio::CoreAudioManager::set_default_device(&name, input);
+        let mut cfg = self.config.lock().await;
+        let slot = if input {
+            &mut cfg.devices.default_input
+        } else {
+            &mut cfg.devices.default_output
+        };
+        if slot.is_some() {
+            *slot = Some(name);
+            let _ = cfg.save();
+        }
+        Ok(())
+    }
+
+    /// Keep the macOS defaults on the current devices (true) or stop managing them (false).
+    async fn set_keep_defaults(&self, keep: bool) -> zbus::fdo::Result<()> {
+        let (_, _, out, inp) = self.get_audio_devices().await;
+        let mut cfg = self.config.lock().await;
+        if keep {
+            cfg.devices.default_output = (!out.is_empty()).then_some(out);
+            cfg.devices.default_input = (!inp.is_empty()).then_some(inp);
+        } else {
+            cfg.devices.default_output = None;
+            cfg.devices.default_input = None;
+        }
+        let _ = cfg.save();
+        Ok(())
+    }
+
+    /// Create (true) or remove (false) devices for inputs without a matching output.
+    async fn set_split_unpaired(&self, enabled: bool) -> zbus::fdo::Result<()> {
+        let mut cfg = self.config.lock().await;
+        cfg.devices.split_unpaired_inputs = enabled;
+        let _ = cfg.save();
+        Ok(())
+    }
+
+    /// Split devices as (hardware, device, plays to, records from), and other hardware as
+    /// (name, why not split). Empty on Linux.
+    async fn get_split_devices(
+        &self,
+    ) -> (Vec<(String, String, String, String)>, Vec<(String, String)>) {
+        #[cfg(target_os = "macos")]
+        {
+            let unpaired = self.config.lock().await.devices.split_unpaired_inputs;
+            let (split, other) = sonomux_backend::coreaudio_channels::describe(unpaired);
+            let pair = |label: &Option<String>, first: Option<u32>| match (label, first) {
+                (Some(l), Some(f)) => format!("{} ({}–{})", l, f, f + 1),
+                _ => "—".to_string(),
+            };
+            let rows = split
+                .into_iter()
+                .flat_map(|(hw, splits)| {
+                    splits.into_iter().map(move |s| {
+                        (
+                            hw.clone(),
+                            s.name.clone(),
+                            pair(&s.output_label, s.output),
+                            pair(&s.input_label, s.input),
+                        )
+                    })
+                })
+                .collect();
+            (rows, other)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            (Vec::new(), Vec::new())
+        }
+    }
+
     /// Return all automation rules with their enabled states: (name, enabled).
     async fn get_rules(&self) -> Vec<(String, bool)> {
         let cfg = self.config.lock().await;

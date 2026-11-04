@@ -21,3 +21,10 @@ tracing-subscriber.workspace = true
 anyhow.workspace = true
 slint.workspace = true
 zbus.workspace = true
+
+[build-dependencies]
+slint-build = "1.18"
+
+# Skia renders text far better than the default on macOS (see main.rs).
+[target.'cfg(target_os = "macos")'.dependencies]
+slint = { workspace = true, features = ["renderer-skia"] }

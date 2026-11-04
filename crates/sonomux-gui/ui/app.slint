@@ -1,0 +1,573 @@
+// Sonomux window, built from Slint's standard widgets so it takes the platform's look:
+// the `cupertino` style on macOS, `native` (Qt, else Fluent) elsewhere. See build.rs.
+
+import {
+    Button, CheckBox, ComboBox, GroupBox, Palette, ScrollView, Slider, StandardListView,
+    StandardTableView, Switch,
+} from "std-widgets.slint";
+
+export struct AppRow {
+    name: string,
+    id: string,
+    category: string,
+    // Pop-up entries: "Automatic (<channel>)" then the channels.
+    choices: [string],
+    choice: int,
+    playing: bool,
+}
+
+export struct CategoryRow {
+    key: string,
+    label: string,
+    choice: int,
+}
+
+export struct RuleRow {
+    name: string,
+    enabled: bool,
+}
+
+component Label inherits Text {
+    color: Palette.foreground;
+    vertical-alignment: center;
+}
+
+component Hint inherits Text {
+    color: Palette.foreground;
+    opacity: 0.65;
+    font-size: 12px;
+    vertical-alignment: center;
+    wrap: word-wrap;
+}
+
+component Heading inherits VerticalLayout {
+    in property <string> title;
+    in property <string> subtitle;
+    spacing: 4px;
+    Label {
+        text: root.title;
+        font-size: 22px;
+        font-weight: 700;
+    }
+    Hint {
+        text: root.subtitle;
+        font-size: 13px;
+    }
+}
+
+component StatusDot inherits HorizontalLayout {
+    in property <bool> ok;
+    in property <string> text;
+    spacing: 8px;
+    alignment: start;
+    Rectangle {
+        width: 8px;
+        height: 8px;
+        y: (parent.height - self.height) / 2;
+        border-radius: 4px;
+        background: root.ok ? #30d158 : #8e8e93;
+    }
+    Hint {
+        text: root.text;
+    }
+}
+
+// One mixer channel. Volume is two-way bound to the window's property for that channel, so
+// hardware moves keep updating it after the user has dragged it.
+component Strip inherits Rectangle {
+    in property <string> name;
+    in property <string> fader;
+    in-out property <float> volume;
+    in property <bool> muted;
+    in property <bool> can-mute;
+    callback moved(float);
+    callback mute-clicked();
+
+    background: Palette.alternate-background;
+    border-radius: 8px;
+
+    VerticalLayout {
+        padding: 10px;
+        spacing: 8px;
+        Label {
+            text: root.name;
+            font-weight: 600;
+            horizontal-alignment: center;
+        }
+        Hint {
+            text: root.fader;
+            font-size: 11px;
+            horizontal-alignment: center;
+        }
+        HorizontalLayout {
+            alignment: center;
+            vertical-stretch: 1;
+            Slider {
+                orientation: vertical;
+                minimum: 0;
+                maximum: 100;
+                value <=> root.volume;
+                min-height: 160px;
+                accessible-label: root.name + " volume";
+                changed(v) => {
+                    root.moved(v);
+                }
+            }
+        }
+        Label {
+            text: round(root.volume) + "%";
+            horizontal-alignment: center;
+        }
+        Button {
+            text: root.muted ? "Muted" : "Mute";
+            primary: root.muted;
+            enabled: root.can-mute;
+            clicked => {
+                root.mute-clicked();
+            }
+        }
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "Sonomux Audio Coordinator";
+    preferred-width: 1040px;
+    preferred-height: 720px;
+    min-width: 760px;
+    min-height: 560px;
+    background: Palette.background;
+
+    in-out property <int> page: 0;
+
+    // Status
+    in property <bool> daemon-online;
+    in property <bool> goxlr-online;
+    in property <bool> headset-present;
+    in property <bool> headset-active;
+    in property <string> headset-battery;
+
+    // Mixer: one property per channel (two-way bound into its strip).
+    in-out property <float> mic-volume: 100;
+    in-out property <float> chat-volume: 100;
+    in-out property <float> music-volume: 100;
+    in-out property <float> system-volume: 100;
+    in-out property <float> game-volume: 100;
+    in-out property <float> speaker-volume: 100;
+    in-out property <float> headset-volume: 80;
+    in property <bool> mic-muted;
+    in property <bool> chat-muted;
+    in property <bool> music-muted;
+    in property <bool> system-muted;
+    in property <bool> game-muted;
+    // Fader letter per channel ("" = not on a fader); also decides whether it can be muted.
+    in property <string> mic-fader;
+    in property <string> chat-fader;
+    in property <string> music-fader;
+    in property <string> system-fader;
+    in property <string> game-fader;
+    // Strip position 0-4, in the GoXLR's fader order.
+    in property <int> mic-slot: 0;
+    in property <int> chat-slot: 1;
+    in property <int> music-slot: 2;
+    in property <int> system-slot: 3;
+    in property <int> game-slot: 4;
+
+    // Routing
+    in property <bool> routing-auto: true;
+    in property <[AppRow]> apps;
+    in property <[CategoryRow]> categories;
+    in property <[string]> channel-choices;
+
+    // Devices
+    in property <bool> devices-supported;
+    in property <[string]> output-devices;
+    in property <[string]> input-devices;
+    in property <int> default-output-index;
+    in property <int> default-input-index;
+    in property <bool> keep-defaults;
+    in property <string> split-title;
+    in property <[[StandardListViewItem]]> split-rows;
+    in property <bool> split-unpaired;
+    in property <[[StandardListViewItem]]> other-rows;
+
+    // Rules
+    in property <[RuleRow]> rules;
+
+    callback channel-volume-changed(string, float);
+    callback channel-mute(string, bool);
+    callback toggle-speakers();
+    callback set-routing-auto(bool);
+    callback app-channel(string, int);
+    callback category-channel(string, int);
+    callback default-device(string, bool);
+    callback set-keep-defaults(bool);
+    callback set-split-unpaired(bool);
+    callback rule-enabled(string, bool);
+
+    function fader-label(f: string) -> string {
+        f == "" ? "No fader" : "Fader " + f
+    }
+
+    HorizontalLayout {
+        // Sidebar
+        Rectangle {
+            width: 210px;
+            background: Palette.alternate-background;
+            VerticalLayout {
+                padding: 10px;
+                spacing: 8px;
+                StandardListView {
+                    vertical-stretch: 1;
+                    current-item <=> root.page;
+                    model: [
+                        { text: "Mixer" },
+                        { text: "App routing" },
+                        { text: "Devices" },
+                        { text: "Rules" },
+                    ];
+                }
+                VerticalLayout {
+                    padding: 6px;
+                    spacing: 6px;
+                    StatusDot {
+                        ok: root.daemon-online;
+                        text: root.daemon-online ? "Daemon running" : "Daemon not running";
+                    }
+                    StatusDot {
+                        ok: root.goxlr-online;
+                        text: root.goxlr-online ? "GoXLR Mini connected" : "GoXLR not connected";
+                    }
+                    if root.headset-present: StatusDot {
+                        ok: root.headset-active;
+                        text: root.headset-active ? "Arctis Nova 7 · " + root.headset-battery : "Arctis Nova 7 · standby";
+                    }
+                }
+            }
+        }
+
+        // Content
+        VerticalLayout {
+            horizontal-stretch: 1;
+            padding: 24px;
+            spacing: 18px;
+
+            if root.page != 0 && !root.daemon-online: Hint {
+                text: "Start sonomuxd to manage routing, devices and rules.";
+            }
+
+            // ---- Mixer ----
+            if root.page == 0: VerticalLayout {
+                spacing: 18px;
+                Heading {
+                    title: "Mixer";
+                    subtitle: "Channels in the GoXLR's fader order. Move a strip here or on the hardware.";
+                }
+                GroupBox {
+                    title: "Channels";
+                    vertical-stretch: 1;
+                    // Strips are placed by slot so the order can follow the hardware.
+                    Rectangle {
+                        min-height: 300px;
+                        property <length> gap: 8px;
+                        property <length> cell: (self.width - 4 * self.gap) / 5;
+                        Strip {
+                            x: root.mic-slot * (parent.cell + parent.gap);
+                            width: parent.cell;
+                            height: parent.height;
+                            name: "Mic";
+                            fader: root.fader-label(root.mic-fader);
+                            volume <=> root.mic-volume;
+                            muted: root.mic-muted;
+                            can-mute: root.mic-fader != "";
+                            moved(v) => { root.channel-volume-changed("Mic", v); }
+                            mute-clicked => { root.channel-mute("Mic", !root.mic-muted); }
+                        }
+                        Strip {
+                            x: root.chat-slot * (parent.cell + parent.gap);
+                            width: parent.cell;
+                            height: parent.height;
+                            name: "Chat";
+                            fader: root.fader-label(root.chat-fader);
+                            volume <=> root.chat-volume;
+                            muted: root.chat-muted;
+                            can-mute: root.chat-fader != "";
+                            moved(v) => { root.channel-volume-changed("Chat", v); }
+                            mute-clicked => { root.channel-mute("Chat", !root.chat-muted); }
+                        }
+                        Strip {
+                            x: root.music-slot * (parent.cell + parent.gap);
+                            width: parent.cell;
+                            height: parent.height;
+                            name: "Music";
+                            fader: root.fader-label(root.music-fader);
+                            volume <=> root.music-volume;
+                            muted: root.music-muted;
+                            can-mute: root.music-fader != "";
+                            moved(v) => { root.channel-volume-changed("Music", v); }
+                            mute-clicked => { root.channel-mute("Music", !root.music-muted); }
+                        }
+                        Strip {
+                            x: root.system-slot * (parent.cell + parent.gap);
+                            width: parent.cell;
+                            height: parent.height;
+                            name: "System";
+                            fader: root.fader-label(root.system-fader);
+                            volume <=> root.system-volume;
+                            muted: root.system-muted;
+                            can-mute: root.system-fader != "";
+                            moved(v) => { root.channel-volume-changed("System", v); }
+                            mute-clicked => { root.channel-mute("System", !root.system-muted); }
+                        }
+                        Strip {
+                            x: root.game-slot * (parent.cell + parent.gap);
+                            width: parent.cell;
+                            height: parent.height;
+                            name: "Game";
+                            fader: root.fader-label(root.game-fader);
+                            volume <=> root.game-volume;
+                            muted: root.game-muted;
+                            can-mute: root.game-fader != "";
+                            moved(v) => { root.channel-volume-changed("Game", v); }
+                            mute-clicked => { root.channel-mute("Game", !root.game-muted); }
+                        }
+                    }
+                }
+                GroupBox {
+                    title: "Outputs";
+                    vertical-stretch: 0;
+                    VerticalLayout {
+                        spacing: 10px;
+                        HorizontalLayout {
+                            spacing: 12px;
+                            Label {
+                                text: "Speakers";
+                                width: 80px;
+                            }
+                            Slider {
+                                minimum: 0;
+                                maximum: 100;
+                                value <=> root.speaker-volume;
+                                accessible-label: "Speakers volume";
+                                changed(v) => { root.channel-volume-changed("Headphones", v); }
+                            }
+                            Label {
+                                text: round(root.speaker-volume) + "%";
+                                width: 44px;
+                                horizontal-alignment: right;
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                Button {
+                                    text: root.speaker-volume <= 0 ? "Unmute" : "Mute";
+                                    clicked => { root.toggle-speakers(); }
+                                }
+                            }
+                        }
+                        if root.headset-present: HorizontalLayout {
+                            spacing: 12px;
+                            Label {
+                                text: "Nova 7";
+                                width: 80px;
+                            }
+                            Slider {
+                                minimum: 0;
+                                maximum: 100;
+                                value <=> root.headset-volume;
+                                enabled: root.headset-active;
+                                accessible-label: "Headset volume";
+                            }
+                            Label {
+                                text: root.headset-active ? round(root.headset-volume) + "%" : "Off";
+                                width: 44px;
+                                horizontal-alignment: right;
+                            }
+                        }
+                        if !root.headset-present: Hint {
+                            text: "The headset row appears when the Arctis Nova 7 is connected.";
+                        }
+                    }
+                }
+            }
+
+            // ---- App routing ----
+            if root.page == 1: VerticalLayout {
+                spacing: 18px;
+                HorizontalLayout {
+                    spacing: 12px;
+                    Heading {
+                        horizontal-stretch: 1;
+                        title: "App routing";
+                        subtitle: "Each app plays on its channel. Change one here, or set a default per category below.";
+                    }
+                    Switch {
+                        text: "Route apps automatically";
+                        checked: root.routing-auto;
+                        toggled => { root.set-routing-auto(self.checked); }
+                    }
+                }
+                GroupBox {
+                    title: "Apps";
+                    vertical-stretch: 1;
+                    ScrollView {
+                        VerticalLayout {
+                            alignment: start;
+                            spacing: 2px;
+                            HorizontalLayout {
+                                spacing: 12px;
+                                padding-bottom: 4px;
+                                Hint { text: "App"; horizontal-stretch: 1; }
+                                Hint { text: "Category"; width: 110px; }
+                                Hint { text: "Channel"; width: 200px; }
+                                Hint { text: "Status"; width: 80px; }
+                            }
+                            for app in root.apps: HorizontalLayout {
+                                spacing: 12px;
+                                padding-top: 4px;
+                                padding-bottom: 4px;
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    Label { text: app.name; font-weight: 600; }
+                                    Hint { text: app.id; font-size: 11px; }
+                                }
+                                Label { text: app.category; width: 110px; }
+                                ComboBox {
+                                    width: 200px;
+                                    model: app.choices;
+                                    current-index: app.choice;
+                                    selected => { root.app-channel(app.id, self.current-index); }
+                                }
+                                StatusDot {
+                                    width: 80px;
+                                    ok: app.playing;
+                                    text: app.playing ? "Playing" : "Idle";
+                                }
+                            }
+                        }
+                    }
+                }
+                GroupBox {
+                    title: "Category defaults";
+                    vertical-stretch: 0;
+                    VerticalLayout {
+                        spacing: 6px;
+                        for c in root.categories: HorizontalLayout {
+                            spacing: 12px;
+                            Label { text: c.label; horizontal-stretch: 1; }
+                            ComboBox {
+                                width: 200px;
+                                model: root.channel-choices;
+                                current-index: c.choice;
+                                selected => { root.category-channel(c.key, self.current-index); }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ---- Devices ----
+            if root.page == 2: VerticalLayout {
+                spacing: 18px;
+                Heading {
+                    title: "Devices";
+                    subtitle: root.devices-supported
+                        ? "Sonomux gives each channel of your hardware its own device, so apps can pick it."
+                        : "On Linux, PipeWire manages devices; Sonomux routes between them.";
+                }
+                if root.devices-supported: GroupBox {
+                    title: "Default devices";
+                    vertical-stretch: 0;
+                    VerticalLayout {
+                        spacing: 8px;
+                        HorizontalLayout {
+                            spacing: 12px;
+                            Label { text: "Output"; width: 80px; }
+                            ComboBox {
+                                horizontal-stretch: 1;
+                                model: root.output-devices;
+                                current-index: root.default-output-index;
+                                selected(v) => { root.default-device(v, false); }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 12px;
+                            Label { text: "Input"; width: 80px; }
+                            ComboBox {
+                                horizontal-stretch: 1;
+                                model: root.input-devices;
+                                current-index: root.default-input-index;
+                                selected(v) => { root.default-device(v, true); }
+                            }
+                        }
+                        Switch {
+                            text: "Keep these as the macOS defaults";
+                            checked: root.keep-defaults;
+                            toggled => { root.set-keep-defaults(self.checked); }
+                        }
+                    }
+                }
+                if root.devices-supported: GroupBox {
+                    title: root.split-title;
+                    vertical-stretch: 0;
+                    VerticalLayout {
+                        spacing: 4px;
+                        StandardTableView {
+                            // Header plus one line per device; the list never needs to scroll.
+                            height: 32px + root.split-rows.length * 28px;
+                            columns: [
+                                { title: "Device", horizontal-stretch: 2 },
+                                { title: "Plays to", horizontal-stretch: 1 },
+                                { title: "Records from", horizontal-stretch: 1 },
+                            ];
+                            rows: root.split-rows;
+                        }
+                        Rectangle { height: 6px; }
+                        CheckBox {
+                            text: "Also create devices for inputs without a matching output";
+                            checked: root.split-unpaired;
+                            toggled => { root.set-split-unpaired(self.checked); }
+                        }
+                        Hint {
+                            text: "Such as Broadcast Stream Mix or Line In. These also appear in the Output list.";
+                        }
+                    }
+                }
+                if root.devices-supported: GroupBox {
+                    title: "Other hardware";
+                    vertical-stretch: 0;
+                    StandardTableView {
+                        height: 32px + root.other-rows.length * 28px;
+                        columns: [
+                            { title: "Device", horizontal-stretch: 2 },
+                            { title: "Status", horizontal-stretch: 1 },
+                        ];
+                        rows: root.other-rows;
+                    }
+                }
+                Rectangle { vertical-stretch: 1; }
+            }
+
+            // ---- Rules ----
+            if root.page == 3: VerticalLayout {
+                spacing: 18px;
+                Heading {
+                    title: "Rules";
+                    subtitle: "Automations from config.toml. Turn one off to pause it.";
+                }
+                GroupBox {
+                    title: "Rules";
+                    vertical-stretch: 0;
+                    VerticalLayout {
+                        spacing: 8px;
+                        alignment: start;
+                        for r in root.rules: Switch {
+                            text: r.name;
+                            checked: r.enabled;
+                            toggled => { root.rule-enabled(r.name, self.checked); }
+                        }
+                    }
+                }
+                Rectangle { vertical-stretch: 1; }
+            }
+        }
+    }
+}
