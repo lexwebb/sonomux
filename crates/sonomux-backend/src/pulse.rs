@@ -1,5 +1,6 @@
 use crate::BackendError;
 use serde_json::Value;
+use sonomux_core::{AppClassifier, DevicesConfig, PoliciesConfig, RoutingConfig, StreamInfo};
 use std::collections::HashSet;
 use tokio::process::Command;
 use tracing::{debug, info, warn};
@@ -321,6 +322,252 @@ impl PulseManager {
         }
 
         Ok(())
+    }
+
+    /// Parse JSON output from `pactl -f json list sink-inputs` into structured `StreamInfo` items.
+    pub fn parse_sink_inputs_json(
+        inputs_json: &Value,
+        sink_id_to_name: &std::collections::HashMap<u64, String>,
+    ) -> Vec<StreamInfo> {
+        let mut result = Vec::new();
+        if let Some(inputs) = inputs_json.as_array() {
+            for inp in inputs {
+                let index = match inp.get("index").and_then(|v| v.as_u64()) {
+                    Some(i) => i,
+                    None => continue,
+                };
+                let sink_index = inp.get("sink").and_then(|v| v.as_u64()).unwrap_or(0);
+                let sink_name = sink_id_to_name.get(&sink_index).cloned().unwrap_or_default();
+                let is_corked = inp.get("corked").and_then(|v| v.as_bool()).unwrap_or(false);
+                let is_muted = inp.get("mute").and_then(|v| v.as_bool()).unwrap_or(false);
+
+                let props = inp.get("properties");
+                let app_name = props
+                    .and_then(|p| p.get("application.name"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let binary = props
+                    .and_then(|p| p.get("application.process.binary"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let media_role = props
+                    .and_then(|p| p.get("media.role"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let media_name = props
+                    .and_then(|p| p.get("media.name"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let node_name = props
+                    .and_then(|p| p.get("node.name"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let pid = props
+                    .and_then(|p| p.get("application.process.id"))
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse::<u32>().ok());
+
+                let mut cmdline = None;
+                let mut exe_path = None;
+                if let Some(p) = pid {
+                    if let Ok(c) = std::fs::read_to_string(format!("/proc/{}/cmdline", p)) {
+                        cmdline = Some(c.replace('\0', " "));
+                    }
+                    if let Ok(l) = std::fs::read_link(format!("/proc/{}/exe", p)) {
+                        exe_path = Some(l.to_string_lossy().to_string());
+                    }
+                }
+
+                result.push(StreamInfo {
+                    index,
+                    sink_index,
+                    sink_name,
+                    app_name,
+                    binary,
+                    media_role,
+                    media_name,
+                    node_name,
+                    pid,
+                    cmdline,
+                    exe_path,
+                    is_corked,
+                    is_muted,
+                });
+            }
+        }
+        result
+    }
+
+    /// Calculate which sink-inputs must be moved according to the classification and routing rules.
+    pub fn compute_routing_moves(
+        streams: &[StreamInfo],
+        routing_config: &RoutingConfig,
+        devices: &DevicesConfig,
+        policies: &PoliciesConfig,
+        surround_available: bool,
+    ) -> Vec<(u64, String, String)> {
+        if !routing_config.enabled {
+            return Vec::new();
+        }
+
+        let mut moves = Vec::new();
+        let keep_off_set: HashSet<String> = policies
+            .keep_off_surround
+            .iter()
+            .map(|s| s.to_lowercase())
+            .collect();
+
+        for stream in streams {
+            let node_name = stream.node_name.as_deref().unwrap_or("");
+            // Skip loopbacks, virtual surround output internal stream, and speech-dispatcher internal dummy
+            if node_name == policies.surround_out_node
+                || node_name.starts_with("output.loopback")
+                || stream.app_name == "speech-dispatcher-dummy"
+            {
+                continue;
+            }
+
+            // Classify application using multi-signal heuristics
+            let category = AppClassifier::classify(stream, &routing_config.app_overrides);
+
+            // Determine target channel from configuration
+            let cat_key = match category {
+                sonomux_core::AppCategory::Game => "game",
+                sonomux_core::AppCategory::Chat => "chat",
+                sonomux_core::AppCategory::Music => "music",
+                sonomux_core::AppCategory::Browser => "browser",
+                sonomux_core::AppCategory::Production => "production",
+                sonomux_core::AppCategory::Soundboard => "soundboard",
+                sonomux_core::AppCategory::System => "system",
+            };
+
+            let target_channel = routing_config
+                .category_targets
+                .get(cat_key)
+                .map(|s| s.as_str())
+                .unwrap_or("System");
+
+            // Resolve target channel to physical/DSP sink
+            let target_sink = match target_channel {
+                "Surround" => {
+                    if surround_available {
+                        &policies.surround_in_node
+                    } else {
+                        &devices.goxlr_game_sink
+                    }
+                }
+                "Game" => &devices.goxlr_game_sink,
+                "Chat" => &devices.goxlr_chat_sink,
+                "Music" => &devices.goxlr_music_sink,
+                "Sample" | "Soundboard" => &devices.goxlr_sample_sink,
+                _ => &devices.goxlr_system_sink,
+            };
+
+            // Enforce keep_off_surround policy
+            let is_in_keep_off = keep_off_set.contains(&stream.app_name.to_lowercase())
+                || keep_off_set.contains(&stream.binary.to_lowercase());
+
+            let effective_target = if is_in_keep_off && target_sink == &policies.surround_in_node {
+                &devices.goxlr_system_sink
+            } else {
+                target_sink
+            };
+
+            if stream.sink_name != *effective_target {
+                let reason = format!(
+                    "{} (Cat: {}, Target: {})",
+                    if stream.app_name.is_empty() {
+                        &stream.binary
+                    } else {
+                        &stream.app_name
+                    },
+                    category,
+                    target_channel
+                );
+                moves.push((stream.index, effective_target.to_string(), reason));
+            }
+        }
+
+        moves
+    }
+
+    /// Fetch all active sink-inputs from PipeWire.
+    pub async fn get_active_streams() -> Result<Vec<StreamInfo>, BackendError> {
+        let inputs_out = Command::new("pactl")
+            .args(["-f", "json", "list", "sink-inputs"])
+            .output()
+            .await
+            .map_err(|e| BackendError::Connection(e.to_string()))?;
+
+        let sinks_out = Command::new("pactl")
+            .args(["-f", "json", "list", "sinks"])
+            .output()
+            .await
+            .map_err(|e| BackendError::Connection(e.to_string()))?;
+
+        let sinks_json: Value = serde_json::from_slice(&sinks_out.stdout).unwrap_or(Value::Null);
+        let inputs_json: Value = serde_json::from_slice(&inputs_out.stdout).unwrap_or(Value::Null);
+
+        let mut sink_id_to_name = std::collections::HashMap::new();
+        if let Some(sinks) = sinks_json.as_array() {
+            for s in sinks {
+                if let (Some(idx), Some(name)) = (
+                    s.get("index").and_then(|v| v.as_u64()),
+                    s.get("name").and_then(|v| v.as_str()),
+                ) {
+                    sink_id_to_name.insert(idx, name.to_string());
+                }
+            }
+        }
+
+        Ok(Self::parse_sink_inputs_json(&inputs_json, &sink_id_to_name))
+    }
+
+    /// Move a specific stream (sink-input) to a destination sink.
+    pub async fn move_stream(stream_idx: u64, target_sink: &str) -> Result<(), BackendError> {
+        info!("Moving stream #{} to '{}'", stream_idx, target_sink);
+        let output = Command::new("pactl")
+            .args(["move-sink-input", &stream_idx.to_string(), target_sink])
+            .output()
+            .await
+            .map_err(|e| BackendError::Connection(e.to_string()))?;
+
+        if !output.status.success() {
+            let err = String::from_utf8_lossy(&output.stderr);
+            return Err(BackendError::Routing(format!("move-sink-input failed: {}", err)));
+        }
+        Ok(())
+    }
+
+    /// Enforce all stream classification & routing policies.
+    pub async fn enforce_stream_routing(
+        routing_config: &RoutingConfig,
+        devices: &DevicesConfig,
+        policies: &PoliciesConfig,
+    ) -> Result<usize, BackendError> {
+        let streams = Self::get_active_streams().await?;
+        let surround_available = Self::sink_exists(&policies.surround_in_node).await;
+
+        let moves = Self::compute_routing_moves(
+            &streams,
+            routing_config,
+            devices,
+            policies,
+            surround_available,
+        );
+
+        let count = moves.len();
+        for (idx, target_sink, reason) in moves {
+            info!(
+                "Enforcing routing: moving stream #{} -> '{}' ({})",
+                idx, target_sink, reason
+            );
+            let _ = Self::move_stream(idx, &target_sink).await;
+        }
+
+        Ok(count)
     }
 
     /// Pure parser: follow sink-input lines to find which target sink index the virtual node feeds.

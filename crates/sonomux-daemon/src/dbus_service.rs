@@ -144,7 +144,7 @@ impl SonomuxDbusService {
             .map_err(|e| zbus::fdo::Error::Failed(format!("Task execution error: {}", e)))?
     }
 
-    /// Enforce Virtual Surround Manager and stream isolation rules immediately.
+    /// Enforce Virtual Surround Manager and stream classification routing rules immediately.
     async fn enforce_policies(&self) -> zbus::fdo::Result<()> {
         let config = self.config.clone();
 
@@ -157,17 +157,43 @@ impl SonomuxDbusService {
                     .map(|s| s.as_str())
                     .collect();
 
-                sonomux_backend::PulseManager::enforce_surround_policies(
+                let _ = sonomux_backend::PulseManager::enforce_surround_policies(
                     &config.policies.surround_out_node,
                     &config.policies.surround_in_node,
                     &config.devices.goxlr_game_sink,
                     &config.devices.goxlr_system_sink,
                     &keep_off,
                 )
-                .await
-                .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+                .await;
+
+                if config.routing.enabled {
+                    sonomux_backend::PulseManager::enforce_stream_routing(
+                        &config.routing,
+                        &config.devices,
+                        &config.policies,
+                    )
+                    .await
+                    .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
+                }
+                Ok(())
             })
             .await
             .map_err(|e| zbus::fdo::Error::Failed(format!("Task execution error: {}", e)))?
+    }
+
+    /// Return live detected streams: (index, app_name, binary, category, current_sink)
+    async fn get_routed_streams(&self) -> Vec<(u64, String, String, String, String)> {
+        let config = self.config.clone();
+        if let Ok(streams) = sonomux_backend::PulseManager::get_active_streams().await {
+            streams
+                .into_iter()
+                .map(|s| {
+                    let cat = sonomux_core::AppClassifier::classify(&s, &config.routing.app_overrides);
+                    (s.index, s.app_name, s.binary, cat.to_string(), s.sink_name)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        }
     }
 }

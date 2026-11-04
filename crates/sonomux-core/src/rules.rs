@@ -100,6 +100,8 @@ pub enum Trigger {
     },
     /// Matches when an audio node/sink/source is present.
     NodePresence { node_name: String, present: bool },
+    /// Matches when an active audio stream in a specific category is detected (e.g. "Game", "Music").
+    StreamCategoryActive { category: String },
     /// Composite AND trigger: all conditions must match.
     And(Vec<Trigger>),
     /// Composite OR trigger: at least one condition must match.
@@ -169,6 +171,11 @@ pub enum Action {
         #[serde(default)]
         args: Vec<String>,
     },
+    /// Route an application or stream to a specific target sink.
+    RouteStream {
+        app_or_binary: String,
+        target_sink: String,
+    },
 }
 
 /// Snapshot of system context evaluated against triggers.
@@ -177,6 +184,7 @@ pub struct RuleContext {
     pub device_statuses: HashMap<String, DeviceStatus>,
     pub device_batteries: HashMap<String, u8>,
     pub present_nodes: HashMap<String, bool>,
+    pub active_stream_categories: HashMap<String, bool>,
 }
 
 impl RuleContext {
@@ -196,6 +204,12 @@ impl RuleContext {
 
     pub fn with_node(mut self, node: &str, present: bool) -> Self {
         self.present_nodes.insert(node.to_string(), present);
+        self
+    }
+
+    pub fn with_stream_category(mut self, category: &str, active: bool) -> Self {
+        self.active_stream_categories
+            .insert(category.to_string(), active);
         self
     }
 }
@@ -263,6 +277,12 @@ impl RuleEngine {
             Trigger::NodePresence { node_name, present } => {
                 let actual = ctx.present_nodes.get(node_name).copied().unwrap_or(false);
                 actual == *present
+            }
+            Trigger::StreamCategoryActive { category } => {
+                ctx.active_stream_categories
+                    .get(category)
+                    .copied()
+                    .unwrap_or(false)
             }
             Trigger::And(triggers) => triggers.iter().all(|t| Self::evaluate_trigger(t, ctx)),
             Trigger::Or(triggers) => triggers.iter().any(|t| Self::evaluate_trigger(t, ctx)),

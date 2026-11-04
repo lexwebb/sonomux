@@ -206,6 +206,17 @@ async fn main() -> anyhow::Result<()> {
                         debug!("Surround policy enforcement: {}", e);
                     }
 
+                    // Enforce intelligent stream classification & routing policies
+                    if config.routing.enabled {
+                        if let Err(e) = PulseManager::enforce_stream_routing(
+                            &config.routing,
+                            &config.devices,
+                            &config.policies,
+                        ).await {
+                            debug!("Stream routing enforcement error: {}", e);
+                        }
+                    }
+
                     // Evaluate rules on maintenance tick
                     evaluate_and_dispatch(
                         &headset,
@@ -275,12 +286,19 @@ async fn evaluate_and_dispatch(
     let headset_sink_present = PulseManager::sink_exists(&config.devices.headset_sink).await;
     let goxlr_source_present = PulseManager::source_exists(&config.devices.goxlr_mix_source).await;
 
-    let ctx = RuleContext::new()
+    let mut ctx = RuleContext::new()
         .with_device_status("headset", headset_status)
         .with_device_status("goxlr", goxlr_status)
         .with_device_battery("headset", battery)
         .with_node(&config.devices.headset_sink, headset_sink_present)
         .with_node(&config.devices.goxlr_mix_source, goxlr_source_present);
+
+    if let Ok(streams) = PulseManager::get_active_streams().await {
+        for s in streams {
+            let cat = sonomux_core::AppClassifier::classify(&s, &config.routing.app_overrides);
+            ctx = ctx.with_stream_category(&cat.to_string(), true);
+        }
+    }
 
     let actions = rule_engine.evaluate(&ctx);
     if !actions.is_empty() {

@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 use tracing::{info, warn};
 
+use std::collections::HashMap;
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("I/O error reading or writing config: {0}")]
@@ -23,6 +25,8 @@ pub struct AppConfig {
     pub devices: DevicesConfig,
     #[serde(default)]
     pub policies: PoliciesConfig,
+    #[serde(default)]
+    pub routing: RoutingConfig,
     #[serde(default = "default_rules")]
     pub rules: Vec<Rule>,
 }
@@ -33,6 +37,7 @@ impl Default for AppConfig {
             daemon: DaemonConfig::default(),
             devices: DevicesConfig::default(),
             policies: PoliciesConfig::default(),
+            routing: RoutingConfig::default(),
             rules: default_rules(),
         }
     }
@@ -71,6 +76,12 @@ pub struct DevicesConfig {
     pub goxlr_game_sink: String,
     /// ALSA sink name for GoXLR System channel.
     pub goxlr_system_sink: String,
+    /// ALSA sink name for GoXLR Chat channel.
+    pub goxlr_chat_sink: String,
+    /// ALSA sink name for GoXLR Music channel.
+    pub goxlr_music_sink: String,
+    /// ALSA sink name for GoXLR Sample channel.
+    pub goxlr_sample_sink: String,
     /// Number of consecutive matching reads before confirming headset state transition.
     pub debounce_count: usize,
 }
@@ -86,6 +97,12 @@ impl Default for DevicesConfig {
             goxlr_game_sink: "alsa_output.usb-TC-Helicon_GoXLRMini-00.HiFi__Line1__sink"
                 .to_string(),
             goxlr_system_sink: "alsa_output.usb-TC-Helicon_GoXLRMini-00.HiFi__Speaker__sink"
+                .to_string(),
+            goxlr_chat_sink: "alsa_output.usb-TC-Helicon_GoXLRMini-00.HiFi__Headphones__sink"
+                .to_string(),
+            goxlr_music_sink: "alsa_output.usb-TC-Helicon_GoXLRMini-00.HiFi__Line2__sink"
+                .to_string(),
+            goxlr_sample_sink: "alsa_output.usb-TC-Helicon_GoXLRMini-00.HiFi__Line3__sink"
                 .to_string(),
             debounce_count: 2,
         }
@@ -110,8 +127,50 @@ impl Default for PoliciesConfig {
         Self {
             surround_in_node: "effect_input.virtual-surround-manager".to_string(),
             surround_out_node: "effect_output.virtual-surround-manager".to_string(),
-            keep_off_surround: vec!["Zen".to_string()],
+            keep_off_surround: vec![
+                "Zen".to_string(),
+                "zen-bin".to_string(),
+                "Chromium".to_string(),
+                "Firefox".to_string(),
+                "Spotify".to_string(),
+                "Discord".to_string(),
+            ],
             loopback_latency_ms: 20,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RoutingConfig {
+    /// Master toggle for automatic stream classification and routing.
+    pub enabled: bool,
+    /// Destination channel per category ("Game", "Chat", "Music", "System", "Sample", or "Surround").
+    pub category_targets: HashMap<String, String>,
+    /// Exact binary or application name overrides mapped to a target channel name.
+    pub app_overrides: HashMap<String, String>,
+}
+
+impl Default for RoutingConfig {
+    fn default() -> Self {
+        let mut category_targets = HashMap::new();
+        category_targets.insert("game".to_string(), "Surround".to_string());
+        category_targets.insert("chat".to_string(), "Chat".to_string());
+        category_targets.insert("music".to_string(), "Music".to_string());
+        category_targets.insert("browser".to_string(), "System".to_string());
+        category_targets.insert("production".to_string(), "System".to_string());
+        category_targets.insert("soundboard".to_string(), "Sample".to_string());
+        category_targets.insert("system".to_string(), "System".to_string());
+
+        let mut app_overrides = HashMap::new();
+        app_overrides.insert("zen-bin".to_string(), "System".to_string());
+        app_overrides.insert("spotify".to_string(), "Music".to_string());
+        app_overrides.insert("discord".to_string(), "Chat".to_string());
+
+        Self {
+            enabled: true,
+            category_targets,
+            app_overrides,
         }
     }
 }

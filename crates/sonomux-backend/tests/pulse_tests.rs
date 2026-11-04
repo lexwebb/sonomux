@@ -245,3 +245,182 @@ async fn test_pulse_manager_loopback_and_routing_apis() {
     let sink_name = PulseManager::get_sink_name_by_index("999_999").await;
     assert_eq!(sink_name, None);
 }
+
+#[test]
+fn test_parse_sink_inputs_json_structured() {
+    let json_data = json!([
+        {
+            "index": 101,
+            "sink": 2,
+            "corked": false,
+            "mute": false,
+            "properties": {
+                "application.name": "Spotify",
+                "application.process.binary": "spotify",
+                "media.role": "music",
+                "media.name": "Track Playback",
+                "node.name": "spotify-player",
+                "application.process.id": "12345"
+            }
+        },
+        {
+            "index": 102,
+            "sink": 1,
+            "corked": true,
+            "mute": false,
+            "properties": {
+                "application.name": "Zen",
+                "application.process.binary": "zen-bin",
+                "media.role": "none",
+                "node.name": "Zen"
+            }
+        }
+    ]);
+
+    let mut sink_id_to_name = std::collections::HashMap::new();
+    sink_id_to_name.insert(1, "system_sink".to_string());
+    sink_id_to_name.insert(2, "music_sink".to_string());
+
+    let streams = PulseManager::parse_sink_inputs_json(&json_data, &sink_id_to_name);
+    assert_eq!(streams.len(), 2);
+    assert_eq!(streams[0].index, 101);
+    assert_eq!(streams[0].sink_name, "music_sink");
+    assert_eq!(streams[0].app_name, "Spotify");
+    assert_eq!(streams[0].media_role, Some("music".to_string()));
+    assert!(!streams[0].is_corked);
+
+    assert_eq!(streams[1].index, 102);
+    assert_eq!(streams[1].sink_name, "system_sink");
+    assert_eq!(streams[1].binary, "zen-bin");
+    assert!(streams[1].is_corked);
+}
+
+#[test]
+fn test_compute_routing_moves_categories() {
+    let mut routing_config = sonomux_core::RoutingConfig::default();
+    routing_config.enabled = true;
+    let devices = sonomux_core::DevicesConfig::default();
+    let policies = sonomux_core::PoliciesConfig::default();
+
+    // Stream 1: Spotify currently on System sink (should move to Music sink)
+    let mut s1 = sonomux_core::StreamInfo::new(1, 10);
+    s1.app_name = "Spotify".to_string();
+    s1.binary = "spotify".to_string();
+    s1.sink_name = devices.goxlr_system_sink.clone();
+
+    // Stream 2: Zen Browser currently on System sink (should stay on System sink)
+    let mut s2 = sonomux_core::StreamInfo::new(2, 10);
+    s2.app_name = "Zen".to_string();
+    s2.binary = "zen-bin".to_string();
+    s2.sink_name = devices.goxlr_system_sink.clone();
+
+    // Stream 3: Game (Cyberpunk2077.exe) currently on System sink (should move to Surround node when available)
+    let mut s3 = sonomux_core::StreamInfo::new(3, 10);
+    s3.app_name = "Cyberpunk2077.exe".to_string();
+    s3.binary = "wine64-preloader".to_string();
+    s3.sink_name = devices.goxlr_system_sink.clone();
+
+    // Stream 4: Discord on System sink (should move to Chat sink)
+    let mut s4 = sonomux_core::StreamInfo::new(4, 10);
+    s4.app_name = "Discord".to_string();
+    s4.binary = "discord".to_string();
+    s4.sink_name = devices.goxlr_system_sink.clone();
+
+    let streams = vec![s1, s2, s3, s4];
+    let moves = PulseManager::compute_routing_moves(
+        &streams,
+        &routing_config,
+        &devices,
+        &policies,
+        true, // surround available
+    );
+
+    assert_eq!(moves.len(), 3);
+    // Spotify -> goxlr_music_sink
+    assert_eq!(moves[0].0, 1);
+    assert_eq!(moves[0].1, devices.goxlr_music_sink);
+
+    // Game -> policies.surround_in_node
+    assert_eq!(moves[1].0, 3);
+    assert_eq!(moves[1].1, policies.surround_in_node);
+
+    // Discord -> goxlr_chat_sink
+    assert_eq!(moves[2].0, 4);
+    assert_eq!(moves[2].1, devices.goxlr_chat_sink);
+}
+
+#[test]
+fn test_compute_routing_moves_fallback_when_surround_unavailable() {
+    let routing_config = sonomux_core::RoutingConfig::default();
+    let devices = sonomux_core::DevicesConfig::default();
+    let policies = sonomux_core::PoliciesConfig::default();
+
+    let mut game_stream = sonomux_core::StreamInfo::new(42, 10);
+    game_stream.app_name = "eldenring.exe".to_string();
+    game_stream.binary = "wine64".to_string();
+    game_stream.sink_name = devices.goxlr_system_sink.clone();
+
+    let moves = PulseManager::compute_routing_moves(
+        &[game_stream],
+        &routing_config,
+        &devices,
+        &policies,
+        false, // surround NOT available -> fallback to goxlr_game_sink!
+    );
+
+    assert_eq!(moves.len(), 1);
+    assert_eq!(moves[0].0, 42);
+    assert_eq!(moves[0].1, devices.goxlr_game_sink);
+}
+
+#[test]
+fn test_compute_routing_moves_keep_off_surround_enforced() {
+    let routing_config = sonomux_core::RoutingConfig::default();
+    let devices = sonomux_core::DevicesConfig::default();
+    let policies = sonomux_core::PoliciesConfig::default();
+
+    // Stream: Zen Browser mistakenly routed to surround_in_node
+    let mut zen_stream = sonomux_core::StreamInfo::new(99, 5);
+    zen_stream.app_name = "Zen".to_string();
+    zen_stream.binary = "zen-bin".to_string();
+    zen_stream.sink_name = policies.surround_in_node.clone();
+
+    let moves = PulseManager::compute_routing_moves(
+        &[zen_stream],
+        &routing_config,
+        &devices,
+        &policies,
+        true,
+    );
+
+    assert_eq!(moves.len(), 1);
+    assert_eq!(moves[0].0, 99);
+    assert_eq!(moves[0].1, devices.goxlr_system_sink); // Diverted to System!
+}
+
+#[test]
+fn test_compute_routing_disabled_skips_all() {
+    let mut routing_config = sonomux_core::RoutingConfig::default();
+    routing_config.enabled = false; // Disabled
+    let devices = sonomux_core::DevicesConfig::default();
+    let policies = sonomux_core::PoliciesConfig::default();
+
+    let mut stream = sonomux_core::StreamInfo::new(1, 10);
+    stream.app_name = "Spotify".to_string();
+    stream.sink_name = devices.goxlr_system_sink.clone();
+
+    let moves = PulseManager::compute_routing_moves(&[stream], &routing_config, &devices, &policies, true);
+    assert!(moves.is_empty());
+}
+
+#[tokio::test]
+async fn test_pulse_manager_stream_routing_async_apis() {
+    let _ = PulseManager::get_active_streams().await;
+    let _ = PulseManager::move_stream(999_999, "non_existent_sink").await;
+
+    let routing_config = sonomux_core::RoutingConfig::default();
+    let devices = sonomux_core::DevicesConfig::default();
+    let policies = sonomux_core::PoliciesConfig::default();
+
+    let _ = PulseManager::enforce_stream_routing(&routing_config, &devices, &policies).await;
+}

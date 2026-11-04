@@ -9,8 +9,14 @@ fn test_default_config_values() {
     assert!(cfg.daemon.dbus_enabled);
     assert_eq!(cfg.devices.debounce_count, 2);
     assert_eq!(cfg.devices.goxlr_socket, "/tmp/goxlr.socket");
+    assert!(cfg.devices.goxlr_chat_sink.contains("Headphones"));
+    assert!(cfg.devices.goxlr_music_sink.contains("Line2"));
+    assert!(cfg.devices.goxlr_sample_sink.contains("Line3"));
     assert_eq!(cfg.policies.loopback_latency_ms, 20);
-    assert_eq!(cfg.policies.keep_off_surround, vec!["Zen".to_string()]);
+    assert!(cfg.policies.keep_off_surround.contains(&"Zen".to_string()));
+    assert!(cfg.routing.enabled);
+    assert_eq!(cfg.routing.category_targets.get("browser"), Some(&"System".to_string()));
+    assert_eq!(cfg.routing.category_targets.get("game"), Some(&"Surround".to_string()));
 }
 
 #[test]

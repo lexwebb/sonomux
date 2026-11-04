@@ -268,3 +268,30 @@ fn test_toml_rule_serialization_roundtrip() {
     let parsed: Rule = toml::from_str(&toml_str).expect("Failed to deserialize rule");
     assert_eq!(parsed, rule);
 }
+
+#[test]
+fn test_trigger_stream_category_active() {
+    let trigger = Trigger::StreamCategoryActive {
+        category: "Game".to_string(),
+    };
+
+    let ctx_with = RuleContext::new().with_stream_category("Game", true);
+    let ctx_without = RuleContext::new().with_stream_category("Game", false);
+    let ctx_empty = RuleContext::new();
+
+    assert!(RuleEngine::evaluate_trigger(&trigger, &ctx_with));
+    assert!(!RuleEngine::evaluate_trigger(&trigger, &ctx_without));
+    assert!(!RuleEngine::evaluate_trigger(&trigger, &ctx_empty));
+}
+
+#[test]
+fn test_action_route_stream_serialization() {
+    let act = Action::RouteStream {
+        app_or_binary: "spotify".to_string(),
+        target_sink: "goxlr_music".to_string(),
+    };
+
+    let toml_str = toml::to_string(&act).expect("Failed to serialize action");
+    let parsed: Action = toml::from_str(&toml_str).expect("Failed to deserialize action");
+    assert_eq!(parsed, act);
+}

@@ -692,7 +692,7 @@ slint! {
                                 HorizontalLayout {
                                     alignment: space-between;
                                     Text {
-                                        text: "RULE: BROWSER STREAM ISOLATION";
+                                        text: "RULE: HEURISTIC STREAM ROUTING ENGINE";
                                         font-size: 11px;
                                         font-weight: 800;
                                         color: #e1e4ea;
@@ -706,7 +706,42 @@ slint! {
                                     }
                                 }
                                 Text {
-                                    text: "IF app == 'Zen Browser'  ➔  Pin to GoXLR System (bypass DSP)";
+                                    text: "Games ➔ Surround/Game  •  VoIP/Chat ➔ Chat  •  Music ➔ Music  •  Browsers ➔ System";
+                                    font-size: 10px;
+                                    font-family: "monospace";
+                                    color: #7a8194;
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            background: #15171d;
+                            border-radius: 4px;
+                            border-width: 1px;
+                            border-color: #232630;
+
+                            VerticalLayout {
+                                padding: 12px;
+                                spacing: 4px;
+
+                                HorizontalLayout {
+                                    alignment: space-between;
+                                    Text {
+                                        text: "RULE: BROWSER & APP SURROUND ISOLATION";
+                                        font-size: 11px;
+                                        font-weight: 800;
+                                        color: #e1e4ea;
+                                    }
+                                    Text {
+                                        text: "ACTIVE";
+                                        font-size: 9px;
+                                        font-weight: 700;
+                                        font-family: "monospace";
+                                        color: #3dd68c;
+                                    }
+                                }
+                                Text {
+                                    text: "Keep-off list [Zen, Firefox, Chrome, Spotify, Discord]  ➔  Prevent 7.1 distortion";
                                     font-size: 10px;
                                     font-family: "monospace";
                                     color: #7a8194;
@@ -768,14 +803,14 @@ slint! {
                                 spacing: 8px;
 
                                 Text {
-                                    text: "ACTIVE PIPEWIRE TOPOLOGY";
+                                    text: "PIPEWIRE AUTOMATIC STREAM ROUTING (HEURISTICS V2)";
                                     font-size: 11px;
                                     font-weight: 800;
                                     color: #e1e4ea;
                                 }
 
                                 Text {
-                                    text: "• effect_output.virtual-surround-manager  ➔  GoXLR Game (HiFi Line 1)\n• Zen Browser Streams  ➔  GoXLR System (HiFi Line 2)\n• Loopback Status: " + root.routing_state;
+                                    text: "• Games (Proton, Wine, Steam, Emulators)  ➔  VSM 7.1 / GoXLR Game\n• Voice & Chat (Discord, Telegram, Slack, Teams)  ➔  GoXLR Chat\n• Music Players (Spotify, Cider, Strawberry, VLC)  ➔  GoXLR Music\n• Browsers (Zen, Firefox, Chrome, Brave)  ➔  GoXLR System\n• DAWs & Production (OBS, Audacity, Reaper)  ➔  GoXLR System\n• Config overrides active in ~/.config/sonomux/config.toml";
                                     font-size: 10px;
                                     font-family: "monospace";
                                     color: #8b92a4;
@@ -784,7 +819,7 @@ slint! {
                                 HorizontalLayout {
                                     alignment: end;
                                     Button {
-                                        text: "ENFORCE GRAPH";
+                                        text: "ENFORCE ROUTING NOW";
                                         clicked => { root.force_routing_refresh(); }
                                     }
                                 }
@@ -1184,18 +1219,27 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(async move {
             if let Some(ref p) = proxy {
                 if p.enforce_policies().await.is_ok() {
-                    info!("Successfully requested daemon to enforce policies.");
+                    info!("Successfully requested daemon to enforce stream routing policies.");
                     return;
                 }
             }
-            let _ = sonomux_backend::PulseManager::enforce_surround_policies(
-                "effect_output.virtual-surround-manager",
-                "effect_input.virtual-surround-manager",
-                "alsa_output.usb-TC-Helicon_GoXLRMini-00.HiFi__Line1__sink",
-                "alsa_output.usb-TC-Helicon_GoXLRMini-00.HiFi__Speaker__sink",
-                &["Zen"],
-            )
-            .await;
+            if let Ok((cfg, _)) = sonomux_core::AppConfig::load_or_create() {
+                let keep_off: Vec<&str> = cfg.policies.keep_off_surround.iter().map(|s| s.as_str()).collect();
+                let _ = sonomux_backend::PulseManager::enforce_surround_policies(
+                    &cfg.policies.surround_out_node,
+                    &cfg.policies.surround_in_node,
+                    &cfg.devices.goxlr_game_sink,
+                    &cfg.devices.goxlr_system_sink,
+                    &keep_off,
+                )
+                .await;
+                let _ = sonomux_backend::PulseManager::enforce_stream_routing(
+                    &cfg.routing,
+                    &cfg.devices,
+                    &cfg.policies,
+                )
+                .await;
+            }
         });
     });
 

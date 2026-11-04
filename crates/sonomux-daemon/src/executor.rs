@@ -198,6 +198,23 @@ impl<'a> ActionExecutor<'a> {
                     warn!("Failed to spawn command '{}': {}", program, e);
                 }
             }
+
+            Action::RouteStream {
+                app_or_binary,
+                target_sink,
+            } => {
+                info!(
+                    "Executing RouteStream: target app/binary='{}' -> '{}'",
+                    app_or_binary, target_sink
+                );
+                if let Ok(streams) = PulseManager::get_active_streams().await {
+                    for s in streams {
+                        if s.app_name == *app_or_binary || s.binary == *app_or_binary {
+                            let _ = PulseManager::move_stream(s.index, target_sink).await;
+                        }
+                    }
+                }
+            }
         }
     }
 }
