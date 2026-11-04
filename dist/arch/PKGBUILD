@@ -31,9 +31,11 @@ package() {
   install -Dm755 target/release/sonomux "$pkgdir/usr/bin/sonomux"
   install -Dm755 target/release/sonomuxd "$pkgdir/usr/bin/sonomuxd"
   install -Dm755 target/release/sonomuxctl "$pkgdir/usr/bin/sonomuxctl"
+  install -Dm755 target/release/sonomux-tray "$pkgdir/usr/bin/sonomux-tray"
 
   # Install Systemd user service
   install -Dm644 dist/systemd/sonomuxd.service "$pkgdir/usr/lib/systemd/user/sonomuxd.service"
+  install -Dm644 dist/systemd/sonomux-tray.service "$pkgdir/usr/lib/systemd/user/sonomux-tray.service"
 
   # Install Desktop launcher
   install -Dm644 dist/desktop/org.sonomux.Sonomux.desktop "$pkgdir/usr/share/applications/org.sonomux.Sonomux.desktop"

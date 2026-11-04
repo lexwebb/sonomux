@@ -1,0 +1,26 @@
+[package]
+name = "sonomux-tray"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Sonomux menu bar extra (macOS) and tray icon (Linux)"
+
+[dependencies]
+sonomux-core = { path = "../sonomux-core" }
+tokio.workspace = true
+zbus.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-app-kit = "0.3"
+dispatch2 = "0.3"
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+# async-io keeps zbus on the runtime the rest of the workspace uses (ksni's default is tokio).
+ksni = { version = "0.3", default-features = false, features = ["async-io"] }

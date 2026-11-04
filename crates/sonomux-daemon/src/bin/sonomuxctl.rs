@@ -45,36 +45,18 @@ async fn main() -> anyhow::Result<()> {
         "status" => match proxy.get_status().await {
             Ok((goxlr_up, hs_status, hs_active, battery, spk_vol, loop_up)) => {
                 if is_json {
-                    let (icon, label, css_class, pct) = if hs_active {
-                        let bat_str = if battery > 0 {
-                            format!("{}%", battery)
-                        } else {
-                            "On".to_string()
-                        };
-                        ("󰋋", format!("󰋋 {}", bat_str), "headset", battery as f64)
-                    } else if !goxlr_up {
-                        ("󰓄", "󰓄 Off".to_string(), "disconnected", 0.0)
-                    } else if spk_vol <= 0.0 {
-                        ("󰝟", "󰝟 Muted".to_string(), "muted", 0.0)
-                    } else {
-                        ("󰓃", format!("󰓃 {:.0}%", spk_vol), "speakers", spk_vol)
-                    };
-
-                    let tooltip = format!(
-                        "GoXLR: {}\nHeadset: {} (Battery: {})\nDesk Speakers: {:.0}%\nFeed: {}\n\nClick: Open Sonomux\nRight-Click: Toggle Mute",
-                        if goxlr_up { "Connected" } else { "Disconnected" },
-                        hs_status,
-                        if hs_active && battery > 0 { format!("{}%", battery) } else { "Unavailable".into() },
-                        spk_vol,
-                        if loop_up { "Streaming" } else { "Idle" }
+                    let sum = sonomux_core::status::summarize(
+                        goxlr_up, &hs_status, hs_active, battery, spk_vol, loop_up,
                     );
-
                     let json_out = serde_json::json!({
-                        "text": label,
-                        "alt": icon,
-                        "tooltip": tooltip,
-                        "class": css_class,
-                        "percentage": pct.round() as u64,
+                        "text": format!("{} {}", sum.indicator.glyph(), sum.label),
+                        "alt": sum.indicator.glyph(),
+                        "tooltip": format!(
+                            "{}\n\nClick: Open Sonomux\nRight-Click: Toggle Mute",
+                            sum.lines.join("\n")
+                        ),
+                        "class": sum.indicator.class(),
+                        "percentage": sum.percentage,
                     });
                     println!("{}", json_out);
                     return Ok(());
