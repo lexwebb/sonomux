@@ -92,6 +92,9 @@ pub struct MixerLevels {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FaderStatus {
     pub channel: String,
+    /// "Unmuted", "MutedToX" or "MutedToAll".
+    #[serde(default)]
+    pub mute_state: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,6 +107,27 @@ pub struct MixerData {
 }
 
 impl MixerData {
+    /// Fader letter ("A".."D") a channel is assigned to, if any.
+    pub fn fader_of(&self, channel: &str) -> Option<String> {
+        self.fader_status
+            .iter()
+            .find(|(_, f)| f.channel == channel)
+            .map(|(k, _)| k.clone())
+    }
+
+    /// Mute state per channel that sits on a fader (true = muted in any way).
+    pub fn channel_mutes(&self) -> std::collections::HashMap<String, bool> {
+        self.fader_status
+            .values()
+            .map(|f| {
+                (
+                    f.channel.clone(),
+                    !f.mute_state.is_empty() && f.mute_state != "Unmuted",
+                )
+            })
+            .collect()
+    }
+
     /// Channels on the physical faders, left to right (A, B, C, D).
     pub fn fader_channels(&self) -> Vec<String> {
         let mut faders: Vec<_> = self.fader_status.iter().collect();

@@ -455,3 +455,64 @@ impl AppClassifier {
         SOUNDBOARD_IDENTIFIERS.contains(&bin_lower) || SOUNDBOARD_IDENTIFIERS.contains(&app_lower)
     }
 }
+
+/// One app in the routing list, possibly made of several streams or helper processes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AppEntry {
+    /// Display name, e.g. "Slack".
+    pub name: String,
+    /// Override key: the app's bundle ID on macOS (common prefix of its processes' IDs,
+    /// e.g. "com.microsoft.teams2"), else its binary name.
+    pub id: String,
+    pub category: AppCategory,
+    /// Any of its streams is playing now.
+    pub playing: bool,
+}
+
+/// Longest common dot-separated prefix with at least two components, if any.
+fn common_bundle_prefix(ids: &[&str]) -> Option<String> {
+    let first: Vec<&str> = ids.first()?.split('.').collect();
+    let mut n = first.len();
+    for id in &ids[1..] {
+        let parts: Vec<&str> = id.split('.').collect();
+        n = n.min(first.iter().zip(&parts).take_while(|(a, b)| a == b).count());
+    }
+    (n >= 2).then(|| first[..n].join("."))
+}
+
+/// Group streams by app (their `binary`), sorted by name.
+pub fn group_apps(streams: &[StreamInfo], overrides: &HashMap<String, String>) -> Vec<AppEntry> {
+    let mut groups: Vec<(String, Vec<&StreamInfo>)> = Vec::new();
+    for s in streams {
+        let name = if s.binary.is_empty() {
+            &s.app_name
+        } else {
+            &s.binary
+        };
+        if name.is_empty() {
+            continue;
+        }
+        match groups.iter_mut().find(|(n, _)| n == name) {
+            Some((_, v)) => v.push(s),
+            None => groups.push((name.clone(), vec![s])),
+        }
+    }
+    let mut apps: Vec<AppEntry> = groups
+        .into_iter()
+        .map(|(name, members)| {
+            let ids: Vec<&str> = members
+                .iter()
+                .map(|s| s.app_name.as_str())
+                .filter(|a| a.contains('.'))
+                .collect();
+            AppEntry {
+                id: common_bundle_prefix(&ids).unwrap_or_else(|| name.clone()),
+                category: AppClassifier::classify(members[0], overrides),
+                playing: members.iter().any(|s| !s.is_corked),
+                name,
+            }
+        })
+        .collect();
+    apps.sort_by_key(|a| a.name.to_lowercase());
+    apps
+}

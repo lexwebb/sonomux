@@ -53,6 +53,9 @@ pub struct Split {
     pub output: Option<u32>,
     /// First input channel, 1-based.
     pub input: Option<u32>,
+    /// Hardware names of the pairs, e.g. "Chat" / "Chat Mic Mix".
+    pub output_label: Option<String>,
+    pub input_label: Option<String>,
 }
 
 /// Remove the L/R marker from a channel name: "Chat L" -> "Chat", "Mic L (processed)" ->
@@ -117,7 +120,10 @@ pub fn plan(
             .iter()
             .position(|(n, _)| n.starts_with(&prefix))
             .or_else(|| in_pairs.iter().position(|(n, _)| n == label));
-        let input = pos.map(|i| in_pairs.remove(i).1);
+        let (input, input_label) = match pos.map(|i| in_pairs.remove(i)) {
+            Some((l, f)) => (Some(f), Some(l)),
+            None => (None, None),
+        };
         splits.push(Split {
             name: format!("{} {}", device_name, label),
             uid: match input {
@@ -126,10 +132,13 @@ pub fn plan(
             },
             output: Some(*out_first),
             input,
+            output_label: Some(label.clone()),
+            input_label,
         });
     }
     if include_unpaired_inputs {
         for (label, in_first) in in_pairs {
+            let label: String = label;
             let mut name = format!("{} {}", device_name, label);
             if splits.iter().any(|s| s.name == name) {
                 name.push_str(" In");
@@ -139,6 +148,8 @@ pub fn plan(
                 uid: format!("{}i{}::{}", UID_PREFIX, in_first, device_uid),
                 output: None,
                 input: Some(in_first),
+                output_label: None,
+                input_label: Some(label),
             });
         }
     }
@@ -199,6 +210,40 @@ pub fn ensure_split_devices(include_unpaired_inputs: bool) -> Vec<String> {
         }
     }
     created
+}
+
+/// Per split hardware its planned devices; then every other physical device with why it is
+/// not split.
+pub type Description = (Vec<(String, Vec<Split>)>, Vec<(String, String)>);
+
+/// What the Devices screen shows (see [`Description`]).
+pub fn describe(include_unpaired_inputs: bool) -> Description {
+    let mut split = Vec::new();
+    let mut other = Vec::new();
+    for hw in CoreAudioManager::devices() {
+        let transport = get::<u32>(hw.id, TRANSPORT, SCOPE_GLOBAL).unwrap_or(0);
+        if transport == TRANSPORT_AGGREGATE || transport == TRANSPORT_VIRTUAL {
+            continue;
+        }
+        let outs = channel_names(hw.id, SCOPE_OUTPUT);
+        let ins = channel_names(hw.id, SCOPE_INPUT);
+        let planned = plan(&hw.name, &hw.uid, &outs, &ins, include_unpaired_inputs);
+        if !planned.is_empty() {
+            split.push((hw.name, planned));
+        } else {
+            let channels = CoreAudioManager::channel_count(hw.id, false)
+                .max(CoreAudioManager::channel_count(hw.id, true));
+            let why = if channels <= 2 {
+                "Stereo · not split"
+            } else if outs.is_empty() && ins.is_empty() {
+                "Channels not named · not split"
+            } else {
+                "No stereo pairs · not split"
+            };
+            other.push((hw.name, why.to_string()));
+        }
+    }
+    (split, other)
 }
 
 /// The hardware device and first output channel behind one of our split devices, if it is one.

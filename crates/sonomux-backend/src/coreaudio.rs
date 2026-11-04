@@ -81,6 +81,7 @@ const OBJ_NAME: u32 = fourcc(b"lnam");
 const DEV_UID: u32 = fourcc(b"uid ");
 const DEV_STREAMS: u32 = fourcc(b"stm#");
 pub(crate) const DEV_PREFERRED_STEREO: u32 = fourcc(b"dch2");
+const DEV_STREAM_CONFIG: u32 = fourcc(b"slay");
 const PROC_PID: u32 = fourcc(b"ppid");
 const PROC_BUNDLE_ID: u32 = fourcc(b"pbid");
 const PROC_RUNNING_OUTPUT: u32 = fourcc(b"piro");
@@ -183,6 +184,13 @@ pub fn app_of_exe(exe: &str) -> String {
         .to_string()
 }
 
+/// An executable inside an app bundle that is not a macOS system service
+/// (`/System/Applications`, e.g. Music, counts as an app).
+pub fn is_user_app(exe: &str) -> bool {
+    exe.contains(".app/")
+        && (!exe.starts_with("/System/") || exe.starts_with("/System/Applications/"))
+}
+
 /// A CoreAudio device as seen by the HAL.
 #[derive(Debug, Clone)]
 pub struct Device {
@@ -220,6 +228,21 @@ impl CoreAudioManager {
                 has_output: data_size(id, DEV_STREAMS, SCOPE_OUTPUT).unwrap_or(0) > 0,
             })
             .collect()
+    }
+
+    /// Channels a device has in one direction (sum over its streams).
+    pub fn channel_count(device: u32, input: bool) -> u32 {
+        let scope = if input { SCOPE_INPUT } else { SCOPE_OUTPUT };
+        // AudioBufferList: u32 count, padding, then {u32 channels, u32 bytes, *mut data} each.
+        let Some(raw) = get_vec::<u64>(device, DEV_STREAM_CONFIG, scope) else {
+            return 0;
+        };
+        let words: Vec<u32> = raw
+            .iter()
+            .flat_map(|w| [*w as u32, (*w >> 32) as u32])
+            .collect();
+        let n = words.first().copied().unwrap_or(0) as usize;
+        (0..n).filter_map(|i| words.get(2 + i * 4)).sum()
     }
 
     /// Every process the HAL knows has audio clients: (process object ID, PID, bundle ID).
@@ -312,6 +335,15 @@ impl CoreAudioManager {
                 }
             })
             .collect()
+    }
+
+    /// Apps for the GUI's routing list: every audio process (playing or idle) that belongs to a
+    /// user-facing app, leaving out system daemons and services.
+    pub async fn list_streams() -> Result<Vec<StreamInfo>, BackendError> {
+        Ok(Self::all_streams()
+            .into_iter()
+            .filter(|s| s.exe_path.as_deref().is_some_and(is_user_app))
+            .collect())
     }
 
     /// Current default output (or input) device.

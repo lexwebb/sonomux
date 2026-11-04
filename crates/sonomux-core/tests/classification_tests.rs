@@ -324,3 +324,35 @@ fn test_stream_info_constructor() {
     assert!(!s.is_corked);
     assert!(!s.is_muted);
 }
+
+#[test]
+fn group_apps_merges_helpers_under_one_bundle_id() {
+    use sonomux_core::group_apps;
+    let s = |binary: &str, app: &str, playing: bool| StreamInfo {
+        binary: binary.into(),
+        app_name: app.into(),
+        is_corked: !playing,
+        ..Default::default()
+    };
+    let streams = [
+        s("Microsoft Teams", "com.microsoft.teams2.modulehost", false),
+        s("Microsoft Teams", "com.microsoft.teams2.helper", true),
+        s("Spotify", "com.spotify.client", false),
+        s("Spotify", "com.spotify.client.helper", false),
+        s("mpv", "mpv", false),
+    ];
+    let apps = group_apps(&streams, &HashMap::new());
+    let got: Vec<(&str, &str, bool)> = apps
+        .iter()
+        .map(|a| (a.name.as_str(), a.id.as_str(), a.playing))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("Microsoft Teams", "com.microsoft.teams2", true),
+            ("mpv", "mpv", false),
+            ("Spotify", "com.spotify.client", false),
+        ]
+    );
+    assert_eq!(apps[0].category, AppCategory::Chat);
+}

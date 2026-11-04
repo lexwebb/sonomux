@@ -528,6 +528,11 @@ impl PulseManager {
         Ok(Self::parse_sink_inputs_json(&inputs_json, &sink_id_to_name))
     }
 
+    /// Apps for the GUI's routing list. On PipeWire, every sink-input is an app stream.
+    pub async fn list_streams() -> Result<Vec<StreamInfo>, BackendError> {
+        Self::get_active_streams().await
+    }
+
     /// Move a specific stream (sink-input) to a destination sink.
     pub async fn move_stream(stream_idx: u64, target_sink: &str) -> Result<(), BackendError> {
         info!("Moving stream #{} to '{}'", stream_idx, target_sink);
