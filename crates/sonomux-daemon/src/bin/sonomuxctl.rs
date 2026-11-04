@@ -34,11 +34,52 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    let cmd = args.first().map(|s| s.as_str()).unwrap_or("status");
+    let is_json = args.iter().any(|a| a == "--json");
+    let cmd = args
+        .iter()
+        .find(|a| !a.starts_with("--"))
+        .map(|s| s.as_str())
+        .unwrap_or("status");
 
     match cmd {
         "status" => match proxy.get_status().await {
             Ok((goxlr_up, hs_status, hs_active, battery, spk_vol, loop_up)) => {
+                if is_json {
+                    let (icon, label, css_class, pct) = if hs_active {
+                        let bat_str = if battery > 0 {
+                            format!("{}%", battery)
+                        } else {
+                            "On".to_string()
+                        };
+                        ("󰋋", format!("󰋋 {}", bat_str), "headset", battery as f64)
+                    } else if !goxlr_up {
+                        ("󰓄", "󰓄 Off".to_string(), "disconnected", 0.0)
+                    } else if spk_vol <= 0.0 {
+                        ("󰝟", "󰝟 Muted".to_string(), "muted", 0.0)
+                    } else {
+                        ("󰓃", format!("󰓃 {:.0}%", spk_vol), "speakers", spk_vol)
+                    };
+
+                    let tooltip = format!(
+                        "GoXLR: {}\nHeadset: {} (Battery: {})\nDesk Speakers: {:.0}%\nFeed: {}\n\nClick: Toggle Mute\nRight-Click: Open Sonomux",
+                        if goxlr_up { "Connected" } else { "Disconnected" },
+                        hs_status,
+                        if hs_active && battery > 0 { format!("{}%", battery) } else { "Unavailable".into() },
+                        spk_vol,
+                        if loop_up { "Streaming" } else { "Idle" }
+                    );
+
+                    let json_out = serde_json::json!({
+                        "text": label,
+                        "alt": icon,
+                        "tooltip": tooltip,
+                        "class": css_class,
+                        "percentage": pct.round() as u64,
+                    });
+                    println!("{}", json_out);
+                    return Ok(());
+                }
+
                 println!("🎛️ Sonomux Audio Status:");
                 println!(
                     "  GoXLR Hardware:   {}",
@@ -65,6 +106,17 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
             Err(e) => {
+                if is_json {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "text": "󰓄 Sonomux Offline",
+                            "tooltip": format!("Daemon error: {}", e),
+                            "class": "error"
+                        })
+                    );
+                    return Ok(());
+                }
                 eprintln!("Failed to query status from daemon: {}", e);
                 std::process::exit(1);
             }

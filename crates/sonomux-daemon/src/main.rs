@@ -56,6 +56,7 @@ async fn main() -> anyhow::Result<()> {
             state: Arc::clone(&shared_state),
             goxlr: goxlr.clone(),
             config: config.clone(),
+            tokio_handle: tokio::runtime::Handle::current(),
         };
 
         tokio::spawn(async move {

@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Sonomux Omarchy / Waybar Status Module
+exec sonomuxctl status --json
