@@ -216,6 +216,173 @@ slint! {
         }
     }
 
+    component ChannelPill inherits Rectangle {
+        in-out property <string> label;
+        in-out property <bool> active: false;
+        callback clicked();
+
+        height: 24px;
+        border-radius: 3px;
+        background: root.active ? #1e2638 : (touch.has-hover ? #171922 : #13151a);
+        border-width: 1px;
+        border-color: root.active ? #3dd68c : #232733;
+
+        HorizontalLayout {
+            padding-left: 10px;
+            padding-right: 10px;
+            spacing: 5px;
+            alignment: center;
+
+            Rectangle {
+                width: 4px;
+                height: 4px;
+                border-radius: 2px;
+                background: root.active ? #3dd68c : transparent;
+                y: 10px;
+            }
+
+            Text {
+                text: root.label;
+                font-size: 9px;
+                font-weight: 700;
+                font-family: "monospace";
+                color: root.active ? #3dd68c : #7a8194;
+                vertical-alignment: center;
+            }
+        }
+
+        touch := TouchArea {
+            clicked => { root.clicked(); }
+        }
+    }
+
+    component IndustrialToggle inherits Rectangle {
+        in-out property <bool> checked: true;
+        in-out property <string> title;
+        in-out property <string> subtitle;
+        callback toggled();
+
+        background: #15171d;
+        border-radius: 4px;
+        border-width: 1px;
+        border-color: #232630;
+
+        VerticalLayout {
+            padding: 12px;
+            spacing: 4px;
+
+            HorizontalLayout {
+                alignment: space-between;
+                Text {
+                    text: root.title;
+                    font-size: 11px;
+                    font-weight: 800;
+                    color: #e1e4ea;
+                }
+
+                Rectangle {
+                    width: 54px;
+                    height: 22px;
+                    border-radius: 3px;
+                    background: root.checked ? #1b3829 : #20232b;
+                    border-width: 1px;
+                    border-color: root.checked ? #3dd68c : #3a3f4d;
+
+                    HorizontalLayout {
+                        alignment: center;
+                        Text {
+                            text: root.checked ? "ACTIVE" : "OFF";
+                            font-size: 9px;
+                            font-weight: 800;
+                            font-family: "monospace";
+                            color: root.checked ? #3dd68c : #7a8194;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    TouchArea {
+                        clicked => { root.toggled(); }
+                    }
+                }
+            }
+
+            Text {
+                text: root.subtitle;
+                font-size: 10px;
+                font-family: "monospace";
+                color: #7a8194;
+            }
+        }
+    }
+
+    component CategoryRow inherits Rectangle {
+        in-out property <string> category_name;
+        in-out property <string> current_target;
+        in-out property <string> opt1: "SYSTEM";
+        in-out property <string> opt2: "MUSIC";
+        in-out property <string> opt3: "GAME";
+        in-out property <string> opt4: "SURROUND";
+        in-out property <bool> has_opt4: false;
+        callback select(string);
+
+        background: #15171d;
+        border-radius: 4px;
+        border-width: 1px;
+        border-color: #232630;
+        height: 48px;
+
+        HorizontalLayout {
+            padding-left: 14px;
+            padding-right: 14px;
+            alignment: space-between;
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                Text {
+                    text: root.category_name;
+                    font-size: 11px;
+                    font-weight: 800;
+                    color: #d6d9e0;
+                    letter-spacing: 0.5px;
+                }
+                Text {
+                    text: "ROUTED TO: " + root.current_target;
+                    font-size: 9px;
+                    font-weight: 700;
+                    font-family: "monospace";
+                    color: #5d6475;
+                }
+            }
+
+            HorizontalLayout {
+                alignment: center;
+                spacing: 6px;
+
+                ChannelPill {
+                    label: root.opt1;
+                    active: root.current_target == root.opt1;
+                    clicked => { root.select(root.opt1); }
+                }
+                ChannelPill {
+                    label: root.opt2;
+                    active: root.current_target == root.opt2;
+                    clicked => { root.select(root.opt2); }
+                }
+                if root.opt3 != "" : ChannelPill {
+                    label: root.opt3;
+                    active: root.current_target == root.opt3;
+                    clicked => { root.select(root.opt3); }
+                }
+                if root.has_opt4 : ChannelPill {
+                    label: root.opt4;
+                    active: root.current_target == root.opt4;
+                    clicked => { root.select(root.opt4); }
+                }
+            }
+        }
+    }
+
     export component MainWindow inherits Window {
         title: "Sonomux Audio Coordinator";
         min-width: 900px;
@@ -241,10 +408,26 @@ slint! {
         in-out property <string> headset_battery: "--";
         in-out property <string> routing_state: "IDLE";
 
+        // Configurable Automation Rules Properties
+        in-out property <bool> rule_headset_switcher_enabled: true;
+        in-out property <bool> rule_surround_isolation_enabled: true;
+
+        // Configurable Stream Routing Properties
+        in-out property <bool> routing_auto_enabled: true;
+        in-out property <string> target_browser: "SYSTEM";
+        in-out property <string> target_game: "SURROUND";
+        in-out property <string> target_music: "MUSIC";
+        in-out property <string> target_chat: "CHAT";
+        in-out property <string> target_production: "SYSTEM";
+        in-out property <string> target_soundboard: "SAMPLE";
+
         callback volume_changed(float);
         callback channel_volume_changed(string, float);
         callback toggle_speakers();
         callback force_routing_refresh();
+        callback toggle_rule(string);
+        callback toggle_routing_enabled();
+        callback set_routing_category(string, string);
 
         HorizontalLayout {
             // Technical Left Sidebar
@@ -644,144 +827,25 @@ slint! {
                         spacing: 8px;
                         vertical-stretch: 1;
 
-                        Rectangle {
-                            background: #15171d;
-                            border-radius: 4px;
-                            border-width: 1px;
-                            border-color: #232630;
-
-                            VerticalLayout {
-                                padding: 12px;
-                                spacing: 4px;
-
-                                HorizontalLayout {
-                                    alignment: space-between;
-                                    Text {
-                                        text: "RULE: AUTO HEADSET SWITCHER";
-                                        font-size: 11px;
-                                        font-weight: 800;
-                                        color: #e1e4ea;
-                                    }
-                                    Text {
-                                        text: "ACTIVE";
-                                        font-size: 9px;
-                                        font-weight: 700;
-                                        font-family: "monospace";
-                                        color: #3dd68c;
-                                    }
-                                }
-                                Text {
-                                    text: "IF headset == Active (debounce: 1500ms)  ➔  Speakers: 0%, Loopback: Loaded";
-                                    font-size: 10px;
-                                    font-family: "monospace";
-                                    color: #7a8194;
-                                }
-                            }
+                        IndustrialToggle {
+                            title: "RULE: AUTO HEADSET SWITCHER";
+                            subtitle: "IF headset == Active  ➔  Mute speakers, establish zero-latency loopback to Nova 7";
+                            checked: root.rule_headset_switcher_enabled;
+                            toggled => { root.toggle_rule("Auto Headset Switcher"); }
                         }
 
-                        Rectangle {
-                            background: #15171d;
-                            border-radius: 4px;
-                            border-width: 1px;
-                            border-color: #232630;
-
-                            VerticalLayout {
-                                padding: 12px;
-                                spacing: 4px;
-
-                                HorizontalLayout {
-                                    alignment: space-between;
-                                    Text {
-                                        text: "RULE: HEURISTIC STREAM ROUTING ENGINE";
-                                        font-size: 11px;
-                                        font-weight: 800;
-                                        color: #e1e4ea;
-                                    }
-                                    Text {
-                                        text: "ACTIVE";
-                                        font-size: 9px;
-                                        font-weight: 700;
-                                        font-family: "monospace";
-                                        color: #3dd68c;
-                                    }
-                                }
-                                Text {
-                                    text: "Games ➔ Surround/Game  •  VoIP/Chat ➔ Chat  •  Music ➔ Music  •  Browsers ➔ System";
-                                    font-size: 10px;
-                                    font-family: "monospace";
-                                    color: #7a8194;
-                                }
-                            }
+                        IndustrialToggle {
+                            title: "RULE: BROWSER & APP SURROUND ISOLATION";
+                            subtitle: "Keep-off list [Zen, Firefox, Chrome, Spotify, Discord]  ➔  Prevent 7.1 distortion";
+                            checked: root.rule_surround_isolation_enabled;
+                            toggled => { root.toggle_rule("Browser Stream Isolation"); }
                         }
 
-                        Rectangle {
-                            background: #15171d;
-                            border-radius: 4px;
-                            border-width: 1px;
-                            border-color: #232630;
-
-                            VerticalLayout {
-                                padding: 12px;
-                                spacing: 4px;
-
-                                HorizontalLayout {
-                                    alignment: space-between;
-                                    Text {
-                                        text: "RULE: BROWSER & APP SURROUND ISOLATION";
-                                        font-size: 11px;
-                                        font-weight: 800;
-                                        color: #e1e4ea;
-                                    }
-                                    Text {
-                                        text: "ACTIVE";
-                                        font-size: 9px;
-                                        font-weight: 700;
-                                        font-family: "monospace";
-                                        color: #3dd68c;
-                                    }
-                                }
-                                Text {
-                                    text: "Keep-off list [Zen, Firefox, Chrome, Spotify, Discord]  ➔  Prevent 7.1 distortion";
-                                    font-size: 10px;
-                                    font-family: "monospace";
-                                    color: #7a8194;
-                                }
-                            }
-                        }
-
-                        Rectangle {
-                            background: #15171d;
-                            border-radius: 4px;
-                            border-width: 1px;
-                            border-color: #232630;
-
-                            VerticalLayout {
-                                padding: 12px;
-                                spacing: 4px;
-
-                                HorizontalLayout {
-                                    alignment: space-between;
-                                    Text {
-                                        text: "RULE: DOWNSTREAM VOLUME TRAVERSAL";
-                                        font-size: 11px;
-                                        font-weight: 800;
-                                        color: #e1e4ea;
-                                    }
-                                    Text {
-                                        text: "ACTIVE";
-                                        font-size: 9px;
-                                        font-weight: 700;
-                                        font-family: "monospace";
-                                        color: #3dd68c;
-                                    }
-                                }
-                                Text {
-                                    text: "DSP: Unity Gain 100%  ➔  Direct hardware DAC mapping";
-                                    font-size: 10px;
-                                    font-family: "monospace";
-                                    color: #7a8194;
-                                }
-                            }
+                        IndustrialToggle {
+                            title: "RULE: DOWNSTREAM VOLUME TRAVERSAL";
+                            subtitle: "DSP: Unity Gain 100%  ➔  Direct physical DAC volume mapping (Omarchy Law)";
+                            checked: true;
+                            toggled => {}
                         }
 
                         Rectangle { vertical-stretch: 1; }
@@ -789,39 +853,107 @@ slint! {
 
                     // TAB 3: STREAM ROUTING
                     if root.active_tab == 3 : VerticalLayout {
-                        spacing: 10px;
+                        spacing: 8px;
                         vertical-stretch: 1;
 
+                        // Master Toggle
+                        IndustrialToggle {
+                            title: "AUTOMATIC HEURISTIC STREAM ROUTING";
+                            subtitle: "Continuously detect application categories and enforce target channels in PipeWire";
+                            checked: root.routing_auto_enabled;
+                            toggled => { root.toggle_routing_enabled(); }
+                        }
+
+                        // Category Route Matrix
+                        VerticalLayout {
+                            spacing: 6px;
+
+                            CategoryRow {
+                                category_name: "GAMES (PROTON / WINE / STEAM / EMULATORS)";
+                                current_target: root.target_game;
+                                opt1: "SURROUND";
+                                opt2: "GAME";
+                                opt3: "SYSTEM";
+                                has_opt4: false;
+                                select(t) => { root.set_routing_category("game", t); }
+                            }
+
+                            CategoryRow {
+                                category_name: "WEB BROWSERS (ZEN / FIREFOX / CHROMIUM / BRAVE)";
+                                current_target: root.target_browser;
+                                opt1: "SYSTEM";
+                                opt2: "MUSIC";
+                                opt3: "GAME";
+                                has_opt4: false;
+                                select(t) => { root.set_routing_category("browser", t); }
+                            }
+
+                            CategoryRow {
+                                category_name: "MUSIC PLAYERS (SPOTIFY / CIDER / VLC / TIDAL)";
+                                current_target: root.target_music;
+                                opt1: "MUSIC";
+                                opt2: "SYSTEM";
+                                opt3: "GAME";
+                                has_opt4: false;
+                                select(t) => { root.set_routing_category("music", t); }
+                            }
+
+                            CategoryRow {
+                                category_name: "VOIP & CHAT (DISCORD / TELEGRAM / SLACK / TEAMS)";
+                                current_target: root.target_chat;
+                                opt1: "CHAT";
+                                opt2: "SYSTEM";
+                                opt3: "";
+                                has_opt4: false;
+                                select(t) => { root.set_routing_category("chat", t); }
+                            }
+
+                            CategoryRow {
+                                category_name: "DAW & CONTENT CREATION (OBS / REAPER / AUDACITY)";
+                                current_target: root.target_production;
+                                opt1: "SYSTEM";
+                                opt2: "GAME";
+                                opt3: "";
+                                has_opt4: false;
+                                select(t) => { root.set_routing_category("production", t); }
+                            }
+
+                            CategoryRow {
+                                category_name: "SOUNDBOARD & SAMPLERS (SOUNDUX / SAMPLES)";
+                                current_target: root.target_soundboard;
+                                opt1: "SAMPLE";
+                                opt2: "SYSTEM";
+                                opt3: "";
+                                has_opt4: false;
+                                select(t) => { root.set_routing_category("soundboard", t); }
+                            }
+                        }
+
+                        // Action Bar
                         Rectangle {
+                            height: 38px;
                             background: #15171d;
                             border-radius: 4px;
                             border-width: 1px;
                             border-color: #232630;
 
-                            VerticalLayout {
-                                padding: 14px;
-                                spacing: 8px;
+                            HorizontalLayout {
+                                padding-left: 12px;
+                                padding-right: 12px;
+                                alignment: space-between;
 
                                 Text {
-                                    text: "PIPEWIRE AUTOMATIC STREAM ROUTING (HEURISTICS V2)";
-                                    font-size: 11px;
-                                    font-weight: 800;
-                                    color: #e1e4ea;
-                                }
-
-                                Text {
-                                    text: "• Games (Proton, Wine, Steam, Emulators)  ➔  VSM 7.1 / GoXLR Game\n• Voice & Chat (Discord, Telegram, Slack, Teams)  ➔  GoXLR Chat\n• Music Players (Spotify, Cider, Strawberry, VLC)  ➔  GoXLR Music\n• Browsers (Zen, Firefox, Chrome, Brave)  ➔  GoXLR System\n• DAWs & Production (OBS, Audacity, Reaper)  ➔  GoXLR System\n• Config overrides active in ~/.config/sonomux/config.toml";
+                                    text: "CONFIG: ~/.config/sonomux/config.toml  •  STATUS: LIVE SYNC";
                                     font-size: 10px;
+                                    font-weight: 700;
                                     font-family: "monospace";
-                                    color: #8b92a4;
+                                    color: #5d6475;
+                                    vertical-alignment: center;
                                 }
 
-                                HorizontalLayout {
-                                    alignment: end;
-                                    Button {
-                                        text: "ENFORCE ROUTING NOW";
-                                        clicked => { root.force_routing_refresh(); }
-                                    }
+                                Button {
+                                    text: "ENFORCE ROUTING NOW";
+                                    clicked => { root.force_routing_refresh(); }
                                 }
                             }
                         }
@@ -846,6 +978,12 @@ trait SonomuxDaemon {
     async fn set_speaker_volume(&self, volume: f64) -> zbus::Result<()>;
     async fn toggle_speaker_mute(&self) -> zbus::Result<bool>;
     async fn enforce_policies(&self) -> zbus::Result<()>;
+    async fn get_routed_streams(&self) -> zbus::Result<Vec<(u64, String, String, String, String)>>;
+    async fn get_routing_config(&self) -> zbus::Result<(bool, std::collections::HashMap<String, String>)>;
+    async fn set_routing_enabled(&self, enabled: bool) -> zbus::Result<()>;
+    async fn set_category_target(&self, category: String, target: String) -> zbus::Result<()>;
+    async fn get_rules(&self) -> zbus::Result<Vec<(String, bool)>>;
+    async fn set_rule_enabled(&self, rule_name: String, enabled: bool) -> zbus::Result<()>;
 }
 
 /// Searches Hyprland's clients JSON for an existing Sonomux window address.
@@ -958,6 +1096,30 @@ async fn main() -> anyhow::Result<()> {
     } else {
         main_window.set_daemon_status("Daemon: Standalone".into());
         main_window.set_daemon_color(slint::Color::from_rgb_u8(165, 173, 203));
+    }
+
+    // Initialize rules and routing configuration from disk
+    if let Ok((cfg, _)) = sonomux_core::AppConfig::load_or_create() {
+        main_window.set_routing_auto_enabled(cfg.routing.enabled);
+        for (cat, target) in &cfg.routing.category_targets {
+            let t = target.to_uppercase();
+            match cat.to_lowercase().as_str() {
+                "browser" => main_window.set_target_browser(t.into()),
+                "game" => main_window.set_target_game(t.into()),
+                "music" => main_window.set_target_music(t.into()),
+                "chat" => main_window.set_target_chat(t.into()),
+                "production" => main_window.set_target_production(t.into()),
+                "soundboard" => main_window.set_target_soundboard(t.into()),
+                _ => {}
+            }
+        }
+        for rule in &cfg.rules {
+            match rule.name.as_str() {
+                "Auto Headset Switcher" => main_window.set_rule_headset_switcher_enabled(rule.enabled),
+                "Browser Stream Isolation" => main_window.set_rule_surround_isolation_enabled(rule.enabled),
+                _ => {}
+            }
+        }
     }
 
     // State synchronization tracking & batching
@@ -1241,6 +1403,131 @@ async fn main() -> anyhow::Result<()> {
                 .await;
             }
         });
+    });
+
+    let proxy_for_rule = dbus_proxy.clone();
+    let weak_rule = main_window.as_weak();
+    main_window.on_toggle_rule(move |rule_name| {
+        let rule_str = rule_name.to_string();
+        let mut new_val = true;
+        if let Some(ui) = weak_rule.upgrade() {
+            new_val = match rule_str.as_str() {
+                "Auto Headset Switcher" => {
+                    let v = !ui.get_rule_headset_switcher_enabled();
+                    ui.set_rule_headset_switcher_enabled(v);
+                    v
+                }
+                "Browser Stream Isolation" => {
+                    let v = !ui.get_rule_surround_isolation_enabled();
+                    ui.set_rule_surround_isolation_enabled(v);
+                    v
+                }
+                _ => true,
+            };
+        }
+        let proxy = proxy_for_rule.clone();
+        tokio::spawn(async move {
+            if let Some(ref p) = proxy {
+                let _ = p.set_rule_enabled(rule_str, new_val).await;
+            } else if let Ok((mut cfg, _)) = sonomux_core::AppConfig::load_or_create() {
+                if let Some(r) = cfg.rules.iter_mut().find(|r| r.name == rule_str) {
+                    r.enabled = new_val;
+                    let _ = cfg.save();
+                }
+            }
+        });
+    });
+
+    let proxy_for_routing = dbus_proxy.clone();
+    let weak_routing = main_window.as_weak();
+    main_window.on_toggle_routing_enabled(move || {
+        let mut new_val = true;
+        if let Some(ui) = weak_routing.upgrade() {
+            new_val = !ui.get_routing_auto_enabled();
+            ui.set_routing_auto_enabled(new_val);
+        }
+        let proxy = proxy_for_routing.clone();
+        tokio::spawn(async move {
+            if let Some(ref p) = proxy {
+                let _ = p.set_routing_enabled(new_val).await;
+            } else if let Ok((mut cfg, _)) = sonomux_core::AppConfig::load_or_create() {
+                cfg.routing.enabled = new_val;
+                let _ = cfg.save();
+            }
+        });
+    });
+
+    let proxy_for_cat = dbus_proxy.clone();
+    let weak_cat = main_window.as_weak();
+    main_window.on_set_routing_category(move |cat, target| {
+        let cat_str = cat.to_string();
+        let target_str = target.to_string();
+        let cat_lower = cat_str.to_lowercase();
+        let target_upper = target_str.to_uppercase();
+
+        if let Some(ui) = weak_cat.upgrade() {
+            match cat_lower.as_str() {
+                "browser" => ui.set_target_browser(target_upper.clone().into()),
+                "game" => ui.set_target_game(target_upper.clone().into()),
+                "music" => ui.set_target_music(target_upper.clone().into()),
+                "chat" => ui.set_target_chat(target_upper.clone().into()),
+                "production" => ui.set_target_production(target_upper.clone().into()),
+                "soundboard" => ui.set_target_soundboard(target_upper.clone().into()),
+                _ => {}
+            }
+        }
+
+        let proxy = proxy_for_cat.clone();
+        tokio::spawn(async move {
+            if let Some(ref p) = proxy {
+                let _ = p.set_category_target(cat_lower, target_upper).await;
+            } else if let Ok((mut cfg, _)) = sonomux_core::AppConfig::load_or_create() {
+                cfg.routing.category_targets.insert(cat_lower, target_upper);
+                let _ = cfg.save();
+            }
+        });
+    });
+
+    // Periodic synchronization for rules and routing config
+    let sync_weak = main_window.as_weak();
+    let sync_proxy = dbus_proxy.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(1500));
+        loop {
+            interval.tick().await;
+            if let Some(ref proxy) = sync_proxy {
+                if let Ok((enabled, targets)) = proxy.get_routing_config().await {
+                    let rules = proxy.get_rules().await.ok();
+                    let weak = sync_weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(ui) = weak.upgrade() {
+                            ui.set_routing_auto_enabled(enabled);
+                            for (cat, target) in targets {
+                                let t = target.to_uppercase();
+                                match cat.to_lowercase().as_str() {
+                                    "browser" => ui.set_target_browser(t.into()),
+                                    "game" => ui.set_target_game(t.into()),
+                                    "music" => ui.set_target_music(t.into()),
+                                    "chat" => ui.set_target_chat(t.into()),
+                                    "production" => ui.set_target_production(t.into()),
+                                    "soundboard" => ui.set_target_soundboard(t.into()),
+                                    _ => {}
+                                }
+                            }
+                            if let Some(rule_list) = rules {
+                                for (name, rule_enabled) in rule_list {
+                                    match name.as_str() {
+                                        "Auto Headset Switcher" => ui.set_rule_headset_switcher_enabled(rule_enabled),
+                                        "Browser Stream Isolation" => ui.set_rule_surround_isolation_enabled(rule_enabled),
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+        }
     });
 
     // Run Slint event loop

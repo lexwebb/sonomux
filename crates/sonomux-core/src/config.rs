@@ -230,4 +230,19 @@ impl AppConfig {
 
         Ok((default_config, user_path))
     }
+
+    /// Save current configuration back to default_config_path().
+    pub fn save(&self) -> Result<(), ConfigError> {
+        let path = Self::default_config_path();
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let toml_string = toml::to_string_pretty(self)?;
+        let header = "# ====================================================================\n\
+                      # Sonomux Audio Coordinator Configuration\n\
+                      # ====================================================================\n\n";
+        let full_content = format!("{}{}", header, toml_string);
+        fs::write(&path, full_content)?;
+        Ok(())
+    }
 }

@@ -18,7 +18,7 @@ pub struct SharedDaemonState {
 pub struct SonomuxDbusService {
     pub state: Arc<Mutex<SharedDaemonState>>,
     pub goxlr: sonomux_device_goxlr::GoXLRClient,
-    pub config: sonomux_core::AppConfig,
+    pub config: Arc<Mutex<sonomux_core::AppConfig>>,
     pub tokio_handle: tokio::runtime::Handle,
 }
 
@@ -146,7 +146,7 @@ impl SonomuxDbusService {
 
     /// Enforce Virtual Surround Manager and stream classification routing rules immediately.
     async fn enforce_policies(&self) -> zbus::fdo::Result<()> {
-        let config = self.config.clone();
+        let config = self.config.lock().await.clone();
 
         self.tokio_handle
             .spawn(async move {
@@ -183,7 +183,7 @@ impl SonomuxDbusService {
 
     /// Return live detected streams: (index, app_name, binary, category, current_sink)
     async fn get_routed_streams(&self) -> Vec<(u64, String, String, String, String)> {
-        let config = self.config.clone();
+        let config = self.config.lock().await.clone();
         if let Ok(streams) = sonomux_backend::PulseManager::get_active_streams().await {
             streams
                 .into_iter()
@@ -195,5 +195,59 @@ impl SonomuxDbusService {
         } else {
             Vec::new()
         }
+    }
+
+    /// Return routing configuration: (enabled, category_targets)
+    async fn get_routing_config(&self) -> (bool, std::collections::HashMap<String, String>) {
+        let cfg = self.config.lock().await;
+        (cfg.routing.enabled, cfg.routing.category_targets.clone())
+    }
+
+    /// Set master toggle for automatic stream routing.
+    async fn set_routing_enabled(&self, enabled: bool) -> zbus::fdo::Result<()> {
+        let mut cfg = self.config.lock().await;
+        cfg.routing.enabled = enabled;
+        let _ = cfg.save();
+        if enabled {
+            let r = cfg.routing.clone();
+            let d = cfg.devices.clone();
+            let p = cfg.policies.clone();
+            self.tokio_handle.spawn(async move {
+                let _ = sonomux_backend::PulseManager::enforce_stream_routing(&r, &d, &p).await;
+            });
+        }
+        Ok(())
+    }
+
+    /// Set target channel for an audio category (e.g. ("browser", "System")).
+    async fn set_category_target(&self, category: String, target: String) -> zbus::fdo::Result<()> {
+        let mut cfg = self.config.lock().await;
+        cfg.routing.category_targets.insert(category.to_lowercase(), target);
+        let _ = cfg.save();
+        if cfg.routing.enabled {
+            let r = cfg.routing.clone();
+            let d = cfg.devices.clone();
+            let p = cfg.policies.clone();
+            self.tokio_handle.spawn(async move {
+                let _ = sonomux_backend::PulseManager::enforce_stream_routing(&r, &d, &p).await;
+            });
+        }
+        Ok(())
+    }
+
+    /// Return all automation rules with their enabled states: (name, enabled).
+    async fn get_rules(&self) -> Vec<(String, bool)> {
+        let cfg = self.config.lock().await;
+        cfg.rules.iter().map(|r| (r.name.clone(), r.enabled)).collect()
+    }
+
+    /// Set enabled state for a specific automation rule.
+    async fn set_rule_enabled(&self, rule_name: String, enabled: bool) -> zbus::fdo::Result<()> {
+        let mut cfg = self.config.lock().await;
+        if let Some(r) = cfg.rules.iter_mut().find(|r| r.name == rule_name) {
+            r.enabled = enabled;
+            let _ = cfg.save();
+        }
+        Ok(())
     }
 }

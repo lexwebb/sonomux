@@ -54,12 +54,14 @@ async fn main() -> anyhow::Result<()> {
         loopback_active: false,
     }));
 
+    let config_shared = Arc::new(Mutex::new(config.clone()));
+
     // Start D-Bus session service if enabled
     if config.daemon.dbus_enabled {
         let dbus_svc = SonomuxDbusService {
             state: Arc::clone(&shared_state),
             goxlr: goxlr.clone(),
-            config: config.clone(),
+            config: Arc::clone(&config_shared),
             tokio_handle: tokio::runtime::Handle::current(),
         };
 
@@ -177,8 +179,9 @@ async fn main() -> anyhow::Result<()> {
 
             // 3. Periodic topology & routing maintenance tick
             _ = ticker.tick() => {
+                let current_cfg = config_shared.lock().await.clone();
                 let goxlr_up = goxlr.status().await == DeviceStatus::Active
-                    && PulseManager::source_exists(&config.devices.goxlr_mix_source).await;
+                    && PulseManager::source_exists(&current_cfg.devices.goxlr_mix_source).await;
 
                 {
                     let mut s = shared_state.lock().await;
@@ -195,23 +198,23 @@ async fn main() -> anyhow::Result<()> {
                     }
 
                     // Enforce Virtual Surround Manager pinning
-                    let keep_off: Vec<&str> = config.policies.keep_off_surround.iter().map(|s| s.as_str()).collect();
+                    let keep_off: Vec<&str> = current_cfg.policies.keep_off_surround.iter().map(|s| s.as_str()).collect();
                     if let Err(e) = PulseManager::enforce_surround_policies(
-                        &config.policies.surround_out_node,
-                        &config.policies.surround_in_node,
-                        &config.devices.goxlr_game_sink,
-                        &config.devices.goxlr_system_sink,
+                        &current_cfg.policies.surround_out_node,
+                        &current_cfg.policies.surround_in_node,
+                        &current_cfg.devices.goxlr_game_sink,
+                        &current_cfg.devices.goxlr_system_sink,
                         &keep_off,
                     ).await {
                         debug!("Surround policy enforcement: {}", e);
                     }
 
                     // Enforce intelligent stream classification & routing policies
-                    if config.routing.enabled {
+                    if current_cfg.routing.enabled {
                         if let Err(e) = PulseManager::enforce_stream_routing(
-                            &config.routing,
-                            &config.devices,
-                            &config.policies,
+                            &current_cfg.routing,
+                            &current_cfg.devices,
+                            &current_cfg.policies,
                         ).await {
                             debug!("Stream routing enforcement error: {}", e);
                         }
@@ -221,7 +224,7 @@ async fn main() -> anyhow::Result<()> {
                     evaluate_and_dispatch(
                         &headset,
                         &goxlr,
-                        &config,
+                        &current_cfg,
                         &shared_state,
                         &state_store,
                         &mut rule_engine,
