@@ -86,8 +86,8 @@ Always validate changes with these commands from the repository root:
 - Never modify files in `/usr/share/omarchy/`. That directory is managed by the system package manager.
 - Status bar configuration lives in `~/.config/omarchy/shell.json`.
 - The `sonomux` bar widget supports:
-  - `onClick`: `"sonomuxctl mute"` (toggles desk speaker mute)
-  - `onRightClick`: `"sonomux"` (opens native Slint GUI)
+  - `onClick`: `"sonomux"` (opens native Slint GUI)
+  - `onRightClick`: `"sonomuxctl mute"` (toggles desk speaker mute)
 - To reload the Omarchy bar after modifying `shell.json`, run `omarchy restart shell`.
 
 ### 5. Physical Hardware vs Mock Testing

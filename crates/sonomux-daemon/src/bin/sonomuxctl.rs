@@ -61,7 +61,7 @@ async fn main() -> anyhow::Result<()> {
                     };
 
                     let tooltip = format!(
-                        "GoXLR: {}\nHeadset: {} (Battery: {})\nDesk Speakers: {:.0}%\nFeed: {}\n\nClick: Toggle Mute\nRight-Click: Open Sonomux",
+                        "GoXLR: {}\nHeadset: {} (Battery: {})\nDesk Speakers: {:.0}%\nFeed: {}\n\nClick: Open Sonomux\nRight-Click: Toggle Mute",
                         if goxlr_up { "Connected" } else { "Disconnected" },
                         hs_status,
                         if hs_active && battery > 0 { format!("{}%", battery) } else { "Unavailable".into() },

@@ -100,6 +100,9 @@ async fn main() -> anyhow::Result<()> {
 
     let mut ticker = tokio::time::interval(Duration::from_millis(config.daemon.check_interval_ms));
 
+    #[cfg(unix)]
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok();
+
     loop {
         tokio::select! {
             // 1. React immediately to headset state events
@@ -195,21 +198,25 @@ async fn main() -> anyhow::Result<()> {
             }
 
             // 3. Graceful shutdown on Ctrl+C or SIGTERM
+            _ = tokio::signal::ctrl_c() => {
+                info!("Shutdown signal (Ctrl+C) received. Cleaning up Sonomux daemon...");
+                if let Some(id) = current_loopback_id {
+                    let _ = PulseManager::unload_module(id).await;
+                }
+                break;
+            }
+
             _ = async {
                 #[cfg(unix)]
                 {
-                    use tokio::signal::unix::{signal, SignalKind};
-                    if let Ok(mut term) = signal(SignalKind::terminate()) {
-                        tokio::select! {
-                            _ = tokio::signal::ctrl_c() => {},
-                            _ = term.recv() => {},
-                        }
+                    if let Some(ref mut term) = sigterm {
+                        term.recv().await;
                         return;
                     }
                 }
-                let _ = tokio::signal::ctrl_c().await;
+                std::future::pending::<()>().await
             } => {
-                info!("Shutdown signal received. Cleaning up Sonomux daemon...");
+                info!("Shutdown signal (SIGTERM) received. Cleaning up Sonomux daemon...");
                 if let Some(id) = current_loopback_id {
                     let _ = PulseManager::unload_module(id).await;
                 }
