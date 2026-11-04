@@ -242,7 +242,11 @@ mod live {
     fn downloads_goxlr_utility_pkg() {
         let pkg = super::download_mac_pkg("GoXLR-on-Linux/goxlr-utility").unwrap();
         let name = pkg.file_name().unwrap().to_string_lossy().to_string();
-        assert!(name.starts_with("goxlr-utility-macos-") && name.ends_with(".pkg"), "{}", name);
+        assert!(
+            name.starts_with("goxlr-utility-macos-") && name.ends_with(".pkg"),
+            "{}",
+            name
+        );
         assert!(std::fs::metadata(&pkg).unwrap().len() > 1_000_000);
         let _ = std::fs::remove_file(pkg);
     }
