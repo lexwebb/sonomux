@@ -2,8 +2,10 @@
 
 use sonomux_core::ipc;
 
+#[cfg(target_os = "macos")]
 struct Ping;
 
+#[cfg(target_os = "macos")]
 #[zbus::interface(name = "org.sonomux.Test")]
 impl Ping {
     fn ping(&self) -> String {
