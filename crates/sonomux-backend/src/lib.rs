@@ -2,6 +2,8 @@
 
 #[cfg(target_os = "macos")]
 pub mod coreaudio;
+#[cfg(target_os = "macos")]
+pub mod coreaudio_tap;
 pub mod pulse;
 
 use async_trait::async_trait;

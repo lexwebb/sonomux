@@ -59,6 +59,7 @@ const HW_PROCESSES: u32 = fourcc(b"prs#");
 const OBJ_NAME: u32 = fourcc(b"lnam");
 const DEV_UID: u32 = fourcc(b"uid ");
 const DEV_STREAMS: u32 = fourcc(b"stm#");
+const DEV_PREFERRED_STEREO: u32 = fourcc(b"dch2");
 const PROC_PID: u32 = fourcc(b"ppid");
 const PROC_BUNDLE_ID: u32 = fourcc(b"pbid");
 const PROC_RUNNING_OUTPUT: u32 = fourcc(b"piro");
@@ -160,6 +161,36 @@ impl CoreAudioManager {
                 has_output: data_size(id, DEV_STREAMS, SCOPE_OUTPUT).unwrap_or(0) > 0,
             })
             .collect()
+    }
+
+    /// Every process the HAL knows has audio clients: (process object ID, PID, bundle ID).
+    pub fn audio_processes() -> Vec<(u32, i32, String)> {
+        get_vec::<u32>(SYSTEM_OBJECT, HW_PROCESSES, SCOPE_GLOBAL)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| {
+                (
+                    p,
+                    get::<i32>(p, PROC_PID, SCOPE_GLOBAL).unwrap_or(-1),
+                    get_string(p, PROC_BUNDLE_ID).unwrap_or_default(),
+                )
+            })
+            .collect()
+    }
+
+    /// The output device a process is playing to, if any.
+    pub fn process_output_device(process: u32) -> Option<Device> {
+        let id = get_vec::<u32>(process, PROC_DEVICES, SCOPE_OUTPUT)?
+            .first()
+            .copied()?;
+        Self::devices().into_iter().find(|d| d.id == id)
+    }
+
+    /// First channel (0-based) of a device's preferred output stereo pair.
+    pub fn preferred_stereo_first(device: u32) -> usize {
+        get_vec::<u32>(device, DEV_PREFERRED_STEREO, SCOPE_OUTPUT)
+            .and_then(|pair| pair.first().copied())
+            .map_or(0, |ch| ch.saturating_sub(1) as usize)
     }
 
     pub async fn sink_exists(name: &str) -> bool {
