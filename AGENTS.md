@@ -97,7 +97,14 @@ Always validate changes with these commands from the repository root:
   - `onRightClick`: `"sonomuxctl mute"` (toggles desk speaker mute)
 - To reload the Omarchy bar after modifying `shell.json`, run `omarchy restart shell`.
 
-### 5. Physical Hardware vs Mock Testing
+### 5. Hardware Support Is Optional (hard rule)
+- Sonomux must install, start and run with **no** supported hardware attached, and with none of the hardware helpers installed.
+- A dependency that only serves specific hardware (GoXLR Utility, `headsetcontrol`, vendor SDKs, udev rules for one device) is **never** a required dependency of any package, installer step or build. Make it optional: `optdepends` on Arch, a separate formula or caveat on Homebrew, a hint from `install.sh`.
+- Only offer or suggest a helper when its hardware is detected (see `install.sh`, `hardware_hints`). Never install one for hardware the user doesn't have.
+- At runtime, a missing helper means that device reads as disconnected: no errors, no repeated log warnings, no prompts.
+- Rust crates for a device are fine to always compile, as long as they need nothing external until the hardware is present.
+
+### 6. Physical Hardware vs Mock Testing
 - The primary developer workstation has physical hardware connected:
   - TC-Helicon GoXLR Mini on USB with active daemon IPC socket at `/tmp/goxlr.socket`.
   - SteelSeries Arctis Nova 7 USB 2.4GHz wireless dongle.

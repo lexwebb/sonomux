@@ -6,7 +6,10 @@ pkgdesc="Unified audio coordinator, stream routing engine, and peripheral manage
 arch=('x86_64' 'aarch64')
 url="https://github.com/lexwebb/sonomux"
 license=('GPL-3.0')
-depends=('pipewire' 'wireplumber' 'headsetcontrol' 'goxlr-utility')
+depends=('pipewire' 'wireplumber')
+# Hardware helpers are never required: install the one for hardware you own.
+optdepends=('goxlr-utility: TC-Helicon GoXLR / GoXLR Mini support'
+            'headsetcontrol: wireless headset presence and battery')
 makedepends=('cargo' 'git')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=('SKIP')
