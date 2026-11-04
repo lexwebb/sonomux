@@ -337,7 +337,10 @@ impl PulseManager {
                     None => continue,
                 };
                 let sink_index = inp.get("sink").and_then(|v| v.as_u64()).unwrap_or(0);
-                let sink_name = sink_id_to_name.get(&sink_index).cloned().unwrap_or_default();
+                let sink_name = sink_id_to_name
+                    .get(&sink_index)
+                    .cloned()
+                    .unwrap_or_default();
                 let is_corked = inp.get("corked").and_then(|v| v.as_bool()).unwrap_or(false);
                 let is_muted = inp.get("mute").and_then(|v| v.as_bool()).unwrap_or(false);
 
@@ -536,7 +539,10 @@ impl PulseManager {
 
         if !output.status.success() {
             let err = String::from_utf8_lossy(&output.stderr);
-            return Err(BackendError::Routing(format!("move-sink-input failed: {}", err)));
+            return Err(BackendError::Routing(format!(
+                "move-sink-input failed: {}",
+                err
+            )));
         }
         Ok(())
     }

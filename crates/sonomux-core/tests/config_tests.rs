@@ -24,8 +24,14 @@ fn test_default_config_values() {
     assert_eq!(cfg.policies.loopback_latency_ms, 20);
     assert!(cfg.policies.keep_off_surround.contains(&"Zen".to_string()));
     assert!(cfg.routing.enabled);
-    assert_eq!(cfg.routing.category_targets.get("browser"), Some(&"System".to_string()));
-    assert_eq!(cfg.routing.category_targets.get("game"), Some(&"Surround".to_string()));
+    assert_eq!(
+        cfg.routing.category_targets.get("browser"),
+        Some(&"System".to_string())
+    );
+    assert_eq!(
+        cfg.routing.category_targets.get("game"),
+        Some(&"Surround".to_string())
+    );
 }
 
 #[test]
@@ -112,6 +118,13 @@ fn test_load_or_create_generates_file() {
     let (cfg2, path2) = AppConfig::load_or_create().expect("Failed second load");
     assert_eq!(path, path2);
     assert_eq!(cfg2.devices.goxlr_socket, "/tmp/goxlr.socket");
+
+    // save() writes edits back to the same path
+    let mut edited = cfg2;
+    edited.daemon.check_interval_ms = 4242;
+    edited.save().expect("Failed save");
+    let (cfg3, _) = AppConfig::load_or_create().expect("Failed reload");
+    assert_eq!(cfg3.daemon.check_interval_ms, 4242);
 
     let _ = fs::remove_dir_all(&temp_dir);
 }

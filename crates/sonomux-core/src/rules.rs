@@ -279,12 +279,11 @@ impl RuleEngine {
                 let actual = ctx.present_nodes.get(node_name).copied().unwrap_or(false);
                 actual == *present
             }
-            Trigger::StreamCategoryActive { category } => {
-                ctx.active_stream_categories
-                    .get(category)
-                    .copied()
-                    .unwrap_or(false)
-            }
+            Trigger::StreamCategoryActive { category } => ctx
+                .active_stream_categories
+                .get(category)
+                .copied()
+                .unwrap_or(false),
             Trigger::And(triggers) => triggers.iter().all(|t| Self::evaluate_trigger(t, ctx)),
             Trigger::Or(triggers) => triggers.iter().any(|t| Self::evaluate_trigger(t, ctx)),
         }

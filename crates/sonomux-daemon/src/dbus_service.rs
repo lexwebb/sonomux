@@ -70,7 +70,12 @@ impl SonomuxDbusService {
                     "Mic" => sonomux_device_goxlr::Channel::Mic,
                     "LineIn" => sonomux_device_goxlr::Channel::LineIn,
                     "LineOut" => sonomux_device_goxlr::Channel::LineOut,
-                    _ => return Err(zbus::fdo::Error::InvalidArgs(format!("Unknown channel: {}", channel))),
+                    _ => {
+                        return Err(zbus::fdo::Error::InvalidArgs(format!(
+                            "Unknown channel: {}",
+                            channel
+                        )))
+                    }
                 };
 
                 goxlr
@@ -192,7 +197,8 @@ impl SonomuxDbusService {
             streams
                 .into_iter()
                 .map(|s| {
-                    let cat = sonomux_core::AppClassifier::classify(&s, &config.routing.app_overrides);
+                    let cat =
+                        sonomux_core::AppClassifier::classify(&s, &config.routing.app_overrides);
                     (s.index, s.app_name, s.binary, cat.to_string(), s.sink_name)
                 })
                 .collect()
@@ -226,7 +232,9 @@ impl SonomuxDbusService {
     /// Set target channel for an audio category (e.g. ("browser", "System")).
     async fn set_category_target(&self, category: String, target: String) -> zbus::fdo::Result<()> {
         let mut cfg = self.config.lock().await;
-        cfg.routing.category_targets.insert(category.to_lowercase(), target);
+        cfg.routing
+            .category_targets
+            .insert(category.to_lowercase(), target);
         let _ = cfg.save();
         if cfg.routing.enabled {
             let r = cfg.routing.clone();
@@ -242,7 +250,10 @@ impl SonomuxDbusService {
     /// Return all automation rules with their enabled states: (name, enabled).
     async fn get_rules(&self) -> Vec<(String, bool)> {
         let cfg = self.config.lock().await;
-        cfg.rules.iter().map(|r| (r.name.clone(), r.enabled)).collect()
+        cfg.rules
+            .iter()
+            .map(|r| (r.name.clone(), r.enabled))
+            .collect()
     }
 
     /// Set enabled state for a specific automation rule.

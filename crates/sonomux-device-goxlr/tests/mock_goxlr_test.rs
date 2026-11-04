@@ -52,6 +52,10 @@ async fn test_goxlr_with_mock_server() {
                                                 "Sampler": false,
                                                 "Headphones": true
                                             }
+                                        },
+                                        "fader_status": {
+                                            "B": { "channel": "Chat" },
+                                            "A": { "channel": "Mic" }
                                         }
                                     }
                                 }
@@ -92,6 +96,17 @@ async fn test_goxlr_with_mock_server() {
         .await
         .expect("Failed to read volume");
     assert_eq!(hp_vol, 200);
+
+    let all = client
+        .get_all_volumes()
+        .await
+        .expect("Failed to read all volumes");
+    assert_eq!(all.get("Game"), Some(&150));
+    let faders = client
+        .get_fader_channels()
+        .await
+        .expect("Failed to read faders");
+    assert_eq!(faders, ["Mic", "Chat"]);
 
     // 4. Volume commands
     client

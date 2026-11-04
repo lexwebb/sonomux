@@ -298,8 +298,10 @@ fn test_parse_sink_inputs_json_structured() {
 
 #[test]
 fn test_compute_routing_moves_categories() {
-    let mut routing_config = sonomux_core::RoutingConfig::default();
-    routing_config.enabled = true;
+    let routing_config = sonomux_core::RoutingConfig {
+        enabled: true,
+        ..Default::default()
+    };
     let devices = sonomux_core::DevicesConfig::default();
     let policies = sonomux_core::PoliciesConfig::default();
 
@@ -401,8 +403,10 @@ fn test_compute_routing_moves_keep_off_surround_enforced() {
 
 #[test]
 fn test_compute_routing_disabled_skips_all() {
-    let mut routing_config = sonomux_core::RoutingConfig::default();
-    routing_config.enabled = false; // Disabled
+    let routing_config = sonomux_core::RoutingConfig {
+        enabled: false, // Disabled
+        ..Default::default()
+    };
     let devices = sonomux_core::DevicesConfig::default();
     let policies = sonomux_core::PoliciesConfig::default();
 
