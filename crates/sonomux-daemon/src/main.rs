@@ -190,6 +190,18 @@ async fn main() -> anyhow::Result<()> {
             // 3. Periodic topology & routing maintenance tick
             _ = ticker.tick() => {
                 let current_cfg = config_shared.lock().await.clone();
+
+                // macOS shows the GoXLR as one 10-channel device; keep the per-channel devices
+                // (GoXLR System, Chat, ...) that apps and routing rely on.
+                // ponytail: GoXLR Mini only, by its CoreAudio name.
+                #[cfg(target_os = "macos")]
+                if goxlr.status().await == DeviceStatus::Active {
+                    use sonomux_backend::coreaudio_channels::{ensure_channel_devices, GOXLR_MINI};
+                    if let Err(e) = ensure_channel_devices("GoXLRMini", GOXLR_MINI) {
+                        debug!("GoXLR channel devices: {}", e);
+                    }
+                }
+
                 let goxlr_up = goxlr.status().await == DeviceStatus::Active
                     && Backend::source_exists(&current_cfg.devices.goxlr_mix_source).await;
 

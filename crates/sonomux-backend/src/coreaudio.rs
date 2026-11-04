@@ -25,6 +25,14 @@ extern "C" {
         qualifier: *const c_void,
         size: *mut u32,
     ) -> i32;
+    fn AudioObjectSetPropertyData(
+        id: u32,
+        addr: *const Address,
+        qualifier_size: u32,
+        qualifier: *const c_void,
+        size: u32,
+        data: *const c_void,
+    ) -> i32;
     fn AudioObjectGetPropertyData(
         id: u32,
         addr: *const Address,
@@ -46,20 +54,34 @@ extern "C" {
     fn proc_pidpath(pid: i32, buf: *mut c_void, size: u32) -> i32;
 }
 
+/// Set a plain-data property. Returns the OSStatus.
+pub(crate) fn set<T: Copy>(id: u32, selector: u32, scope: u32, value: &[T]) -> i32 {
+    unsafe {
+        AudioObjectSetPropertyData(
+            id,
+            &addr(selector, scope),
+            0,
+            std::ptr::null(),
+            std::mem::size_of_val(value) as u32,
+            value.as_ptr().cast(),
+        )
+    }
+}
+
 const fn fourcc(s: &[u8; 4]) -> u32 {
     u32::from_be_bytes(*s)
 }
 
 const SYSTEM_OBJECT: u32 = 1;
 const SCOPE_GLOBAL: u32 = fourcc(b"glob");
-const SCOPE_INPUT: u32 = fourcc(b"inpt");
-const SCOPE_OUTPUT: u32 = fourcc(b"outp");
+pub(crate) const SCOPE_INPUT: u32 = fourcc(b"inpt");
+pub(crate) const SCOPE_OUTPUT: u32 = fourcc(b"outp");
 const HW_DEVICES: u32 = fourcc(b"dev#");
 const HW_PROCESSES: u32 = fourcc(b"prs#");
 const OBJ_NAME: u32 = fourcc(b"lnam");
 const DEV_UID: u32 = fourcc(b"uid ");
 const DEV_STREAMS: u32 = fourcc(b"stm#");
-const DEV_PREFERRED_STEREO: u32 = fourcc(b"dch2");
+pub(crate) const DEV_PREFERRED_STEREO: u32 = fourcc(b"dch2");
 const PROC_PID: u32 = fourcc(b"ppid");
 const PROC_BUNDLE_ID: u32 = fourcc(b"pbid");
 const PROC_RUNNING_OUTPUT: u32 = fourcc(b"piro");

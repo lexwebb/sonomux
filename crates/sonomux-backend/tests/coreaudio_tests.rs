@@ -35,3 +35,16 @@ async fn unsupported_routing_is_reported_not_faked() {
     assert!(CoreAudioManager::move_stream(1, "b").await.is_err());
     assert_eq!(CoreAudioManager::find_loopback_module("a").await, None);
 }
+
+#[test]
+fn channel_devices_need_the_physical_device() {
+    use sonomux_backend::coreaudio_channels::{ensure_channel_devices, GOXLR_MINI};
+    assert!(ensure_channel_devices("sonomux-no-such-device", GOXLR_MINI).is_err());
+    // Output pairs tile 1-10 without overlap.
+    let outs: Vec<u32> = GOXLR_MINI
+        .iter()
+        .filter(|c| !c.input)
+        .map(|c| c.first)
+        .collect();
+    assert_eq!(outs, [1, 3, 5, 7, 9]);
+}

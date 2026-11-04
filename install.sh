@@ -27,10 +27,6 @@ if [ "$(uname -s)" = "Darwin" ]; then
 
   echo "🚀 Installing binaries to ${BIN_DIR}..."
   install -m 755 target/release/sonomux target/release/sonomuxd target/release/sonomuxctl "${BIN_DIR}/"
-  install -m 755 dist/macos/goxlr-channels "${BIN_DIR}/goxlr-channels"
-
-  echo "🎚️ Creating per-channel GoXLR devices..."
-  "${BIN_DIR}/goxlr-channels" || echo "⚠️ goxlr-channels failed (is the GoXLR plugged in?). Re-run it later."
 
   echo "⚙️ Configuring launchd agent..."
   sed -e "s|@BIN_DIR@|${BIN_DIR}|g" -e "s|@LOG_FILE@|${HOME}/Library/Logs/sonomuxd.log|g" \

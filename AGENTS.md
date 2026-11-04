@@ -17,7 +17,8 @@ crates/
 │                            # Pure Rust domain logic; no direct hardware or I/O calls.
 ├── sonomux-backend/         # Audio graph backends behind `sonomux_backend::Backend`:
 │                            # Linux: PipeWire / PulseAudio (PulseManager): loopbacks, stream pinning, volume traversal.
-│                            # macOS: CoreAudio (CoreAudioManager): device + playing-app queries; routing/loopback TODO.
+│                            # macOS: CoreAudio (CoreAudioManager): devices, playing apps, per-channel GoXLR devices
+│                            # (coreaudio_channels), per-app routing via process taps (coreaudio_tap).
 ├── sonomux-device-headset/  # Headset presence detection & battery telemetry via HID / headsetcontrol.
 │                            # State debouncing and event streaming (HeadsetMonitor).
 ├── sonomux-device-goxlr/    # GoXLR Mini hardware client (GoXlrClient) via Unix domain socket IPC (/tmp/goxlr.socket).
@@ -31,7 +32,6 @@ crates/
 dist/                        # Deployment, packaging, and integration assets:
 ├── systemd/                 # User systemd service (sonomuxd.service)
 ├── launchd/                 # macOS LaunchAgent (org.sonomux.sonomuxd.plist; install.sh fills paths)
-├── macos/                   # goxlr-channels: per-channel GoXLR CoreAudio devices (GoXLR System, Chat, ...)
 ├── dbus/                    # Session D-Bus auto-activation service (org.sonomux.Daemon.service)
 ├── desktop/                 # XDG application desktop entry (org.sonomux.Sonomux.desktop)
 ├── omarchy/                 # Omarchy status bar polling script (sonomux-bar)

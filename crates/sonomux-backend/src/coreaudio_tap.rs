@@ -61,7 +61,7 @@ pub struct AppRoute {
 // The raw pointer is owned by this struct and only freed in Drop.
 unsafe impl Send for AppRoute {}
 
-fn check(st: i32, what: &str) -> Result<(), BackendError> {
+pub(crate) fn check(st: i32, what: &str) -> Result<(), BackendError> {
     if st == 0 {
         Ok(())
     } else {
@@ -72,16 +72,16 @@ fn check(st: i32, what: &str) -> Result<(), BackendError> {
     }
 }
 
-fn key(k: &CStr) -> Retained<NSString> {
+pub(crate) fn key(k: &CStr) -> Retained<NSString> {
     NSString::from_str(k.to_str().unwrap())
 }
 
-fn obj<T: objc2::Message>(r: &Retained<T>) -> &AnyObject {
+pub(crate) fn obj<T: objc2::Message>(r: &Retained<T>) -> &AnyObject {
     // Every Objective-C object is an AnyObject.
     unsafe { &*(Retained::as_ptr(r) as *const AnyObject) }
 }
 
-fn dict(pairs: &[(&CStr, &AnyObject)]) -> Retained<NSDictionary<NSString, AnyObject>> {
+pub(crate) fn dict(pairs: &[(&CStr, &AnyObject)]) -> Retained<NSDictionary<NSString, AnyObject>> {
     let keys: Vec<Retained<NSString>> = pairs.iter().map(|(k, _)| key(k)).collect();
     let key_refs: Vec<&NSString> = keys.iter().map(|k| &**k).collect();
     let vals: Vec<&AnyObject> = pairs.iter().map(|(_, v)| *v).collect();

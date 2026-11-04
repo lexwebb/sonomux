@@ -112,8 +112,8 @@ impl Default for DevicesConfig {
 
 #[cfg(target_os = "macos")]
 impl Default for DevicesConfig {
-    /// CoreAudio device names (UIDs also work). The per-channel GoXLR devices come from
-    /// `dist/macos/goxlr-channels`, since GoXLR Utility's own aggregates fail on macOS 26.
+    /// CoreAudio device names (UIDs also work). sonomuxd creates the per-channel GoXLR devices
+    /// (see `sonomux_backend::coreaudio_channels`).
     fn default() -> Self {
         Self {
             goxlr_socket: "/tmp/goxlr.socket".to_string(),
