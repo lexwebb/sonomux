@@ -238,9 +238,88 @@ trait SonomuxDaemon {
     async fn enforce_policies(&self) -> zbus::Result<()>;
 }
 
+/// Searches Hyprland's clients JSON for an existing Sonomux window address.
+pub fn find_existing_hyprland_address(clients_json: &str) -> Option<String> {
+    let clients: serde_json::Value = serde_json::from_str(clients_json).ok()?;
+    let array = clients.as_array()?;
+    for client in array {
+        let title = client.get("title").and_then(|v| v.as_str()).unwrap_or("");
+        let init_title = client.get("initialTitle").and_then(|v| v.as_str()).unwrap_or("");
+        let class = client.get("class").and_then(|v| v.as_str()).unwrap_or("");
+        let init_class = client.get("initialClass").and_then(|v| v.as_str()).unwrap_or("");
+
+        if title == "Sonomux Audio Coordinator"
+            || init_title == "Sonomux Audio Coordinator"
+            || class == "sonomux"
+            || init_class == "sonomux"
+        {
+            if let Some(addr) = client.get("address").and_then(|v| v.as_str()) {
+                return Some(addr.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Attempts to focus an existing window if Sonomux is already running.
+/// Returns true if an existing window was found and focused.
+pub fn try_focus_existing_instance() -> bool {
+    // 1. Hyprland compositor
+    if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
+        if let Ok(output) = std::process::Command::new("hyprctl")
+            .args(["clients", "-j"])
+            .output()
+        {
+            if output.status.success() {
+                if let Ok(json_str) = String::from_utf8(output.stdout) {
+                    if let Some(addr) = find_existing_hyprland_address(&json_str) {
+                        info!("Found existing Sonomux window in Hyprland at {}, focusing...", addr);
+                        // Try modern Lua dispatch first (Hyprland >= 0.56)
+                        let lua_cmd = format!("hl.dsp.focus({{ window = \"address:{}\" }})", addr);
+                        let status = std::process::Command::new("hyprctl")
+                            .args(["dispatch", &lua_cmd])
+                            .status();
+
+                        if let Ok(s) = status {
+                            if s.success() {
+                                return true;
+                            }
+                        }
+
+                        // Fallback to classic focuswindow
+                        let _ = std::process::Command::new("hyprctl")
+                            .args(["dispatch", "focuswindow", &format!("address:{}", addr)])
+                            .status();
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Generic X11 / xdotool fallback
+    if let Ok(status) = std::process::Command::new("xdotool")
+        .args(["search", "--name", "Sonomux Audio Coordinator", "windowactivate"])
+        .status()
+    {
+        if status.success() {
+            info!("Found existing Sonomux window via xdotool, focused.");
+            return true;
+        }
+    }
+
+    false
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
+
+    if try_focus_existing_instance() {
+        info!("Existing Sonomux instance focused. Exiting duplicate process.");
+        return Ok(());
+    }
+
     info!("Starting Sonomux Slint GUI...");
     let main_window = MainWindow::new()?;
 
@@ -428,4 +507,60 @@ async fn main() -> anyhow::Result<()> {
     // Run Slint event loop
     main_window.run()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_find_existing_hyprland_address_matches_title() {
+        let json = r#"[
+            {
+                "address": "0x580f2432bce0",
+                "class": "discord",
+                "title": "Discord",
+                "initialTitle": "Discord"
+            },
+            {
+                "address": "0x580f2480a390",
+                "class": "",
+                "title": "Sonomux Audio Coordinator",
+                "initialTitle": "Sonomux Audio Coordinator"
+            }
+        ]"#;
+
+        let addr = find_existing_hyprland_address(json);
+        assert_eq!(addr, Some("0x580f2480a390".to_string()));
+    }
+
+    #[test]
+    fn test_find_existing_hyprland_address_matches_class() {
+        let json = r#"[
+            {
+                "address": "0x12345678",
+                "class": "sonomux",
+                "title": "Audio Settings",
+                "initialTitle": "Audio Settings"
+            }
+        ]"#;
+
+        let addr = find_existing_hyprland_address(json);
+        assert_eq!(addr, Some("0x12345678".to_string()));
+    }
+
+    #[test]
+    fn test_find_existing_hyprland_address_none_when_empty_or_different() {
+        let json = r#"[
+            {
+                "address": "0x580f2432bce0",
+                "class": "discord",
+                "title": "Discord"
+            }
+        ]"#;
+
+        assert_eq!(find_existing_hyprland_address(json), None);
+        assert_eq!(find_existing_hyprland_address("[]"), None);
+        assert_eq!(find_existing_hyprland_address("invalid json"), None);
+    }
 }
