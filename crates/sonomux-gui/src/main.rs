@@ -242,6 +242,7 @@ slint! {
         in-out property <string> routing_state: "IDLE";
 
         callback volume_changed(float);
+        callback channel_volume_changed(string, float);
         callback toggle_speakers();
         callback force_routing_refresh();
 
@@ -446,7 +447,10 @@ slint! {
                                 subtitle: "CH 1-2";
                                 volume: root.system_volume;
                                 muted: false;
-                                volume_changed(v) => { root.system_volume = v; }
+                                volume_changed(v) => {
+                                    root.system_volume = v;
+                                    root.channel_volume_changed("System", v);
+                                }
                                 toggle_mute() => {}
                             }
 
@@ -455,7 +459,10 @@ slint! {
                                 subtitle: "VSM 7.1";
                                 volume: root.game_volume;
                                 muted: false;
-                                volume_changed(v) => { root.game_volume = v; }
+                                volume_changed(v) => {
+                                    root.game_volume = v;
+                                    root.channel_volume_changed("Game", v);
+                                }
                                 toggle_mute() => {}
                             }
 
@@ -464,7 +471,10 @@ slint! {
                                 subtitle: "VOIP";
                                 volume: root.chat_volume;
                                 muted: false;
-                                volume_changed(v) => { root.chat_volume = v; }
+                                volume_changed(v) => {
+                                    root.chat_volume = v;
+                                    root.channel_volume_changed("Chat", v);
+                                }
                                 toggle_mute() => {}
                             }
 
@@ -473,7 +483,10 @@ slint! {
                                 subtitle: "MEDIA";
                                 volume: root.music_volume;
                                 muted: false;
-                                volume_changed(v) => { root.music_volume = v; }
+                                volume_changed(v) => {
+                                    root.music_volume = v;
+                                    root.channel_volume_changed("Music", v);
+                                }
                                 toggle_mute() => {}
                             }
 
@@ -485,6 +498,7 @@ slint! {
                                 muted: root.speaker_volume <= 0.0;
                                 volume_changed(v) => {
                                     root.speaker_volume = v;
+                                    root.channel_volume_changed("Headphones", v);
                                     root.volume_changed(v);
                                 }
                                 toggle_mute() => {
@@ -797,6 +811,8 @@ slint! {
 )]
 trait SonomuxDaemon {
     async fn get_status(&self) -> zbus::Result<(bool, String, bool, u8, f64, bool)>;
+    async fn get_channel_volumes(&self) -> zbus::Result<std::collections::HashMap<String, f64>>;
+    async fn set_channel_volume(&self, channel: String, volume_pct: f64) -> zbus::Result<()>;
     async fn set_speaker_volume(&self, volume: f64) -> zbus::Result<()>;
     async fn toggle_speaker_mute(&self) -> zbus::Result<bool>;
     async fn enforce_policies(&self) -> zbus::Result<()>;
@@ -920,42 +936,57 @@ async fn main() -> anyhow::Result<()> {
     let goxlr_for_poll = goxlr.clone();
 
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_millis(1000));
+        let mut interval = tokio::time::interval(Duration::from_millis(100));
         loop {
             interval.tick().await;
 
             if let Some(ref proxy) = proxy_for_poll {
-                if let Ok((goxlr_up, hs_status, hs_active, battery, spk_vol, loop_up)) =
+                if let Ok((goxlr_up, _hs_status, hs_active, battery, spk_vol, loop_up)) =
                     proxy.get_status().await
                 {
+                    let ch_vols = proxy.get_channel_volumes().await.ok();
                     let weak = handle.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(ui) = weak.upgrade() {
-                            ui.set_daemon_status("Daemon: Connected".into());
-                            ui.set_daemon_color(slint::Color::from_rgb_u8(166, 218, 149));
+                            ui.set_daemon_status("ONLINE".into());
+                            ui.set_daemon_color(slint::Color::from_rgb_u8(61, 214, 140));
                             ui.set_goxlr_status(if goxlr_up {
-                                "Active (Connected)".into()
+                                "ONLINE".into()
                             } else {
-                                "Disconnected".into()
+                                "OFFLINE".into()
                             });
                             ui.set_headset_active(hs_active);
                             ui.set_headset_status(if hs_active {
-                                format!("Active ({})", hs_status).into()
+                                "ACTIVE".into()
                             } else {
-                                hs_status.into()
+                                "STANDBY".into()
                             });
                             ui.set_headset_battery(if hs_active && battery > 0 {
                                 format!("{}%", battery).into()
                             } else if hs_active {
-                                "Connected".into()
+                                "ACTIVE".into()
                             } else {
-                                "Unavailable".into()
+                                "--".into()
                             });
                             ui.set_speaker_volume(spk_vol as f32);
+                            if let Some(ref map) = ch_vols {
+                                if let Some(&v) = map.get("System") {
+                                    ui.set_system_volume(v as f32);
+                                }
+                                if let Some(&v) = map.get("Game") {
+                                    ui.set_game_volume(v as f32);
+                                }
+                                if let Some(&v) = map.get("Chat") {
+                                    ui.set_chat_volume(v as f32);
+                                }
+                                if let Some(&v) = map.get("Music") {
+                                    ui.set_music_volume(v as f32);
+                                }
+                            }
                             ui.set_routing_state(if loop_up {
-                                "Active (Routing GoXLR -> Headset)".into()
+                                "STREAMING (LOOPBACK ACTIVE)".into()
                             } else {
-                                "Idle (Headset Standby)".into()
+                                "IDLE (LOOPBACK UNLOADED)".into()
                             });
                         }
                     });
@@ -966,31 +997,45 @@ async fn main() -> anyhow::Result<()> {
             // Standalone fallback polling
             let weak = handle.clone();
             let goxlr_client = goxlr_for_poll.clone();
-            let hp_vol = goxlr_client.get_headphones_volume().await.ok();
+            let all_vols = goxlr_client.get_all_volumes().await.ok();
             let telemetry = sonomux_device_headset::HeadsetMonitor::probe_raw()
                 .await
                 .ok();
 
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = weak.upgrade() {
-                    ui.set_daemon_status("Daemon: Standalone".into());
-                    ui.set_daemon_color(slint::Color::from_rgb_u8(165, 173, 203));
-                    if let Some(vol) = hp_vol {
-                        ui.set_speaker_volume((vol as f32 / 255.0) * 100.0);
+                    ui.set_daemon_status("STANDALONE".into());
+                    ui.set_daemon_color(slint::Color::from_rgb_u8(138, 144, 160));
+                    if let Some(ref vols) = all_vols {
+                        if let Some(&vol) = vols.get("Headphones") {
+                            ui.set_speaker_volume((vol as f32 / 255.0) * 100.0);
+                        }
+                        if let Some(&vol) = vols.get("System") {
+                            ui.set_system_volume((vol as f32 / 255.0) * 100.0);
+                        }
+                        if let Some(&vol) = vols.get("Game") {
+                            ui.set_game_volume((vol as f32 / 255.0) * 100.0);
+                        }
+                        if let Some(&vol) = vols.get("Chat") {
+                            ui.set_chat_volume((vol as f32 / 255.0) * 100.0);
+                        }
+                        if let Some(&vol) = vols.get("Music") {
+                            ui.set_music_volume((vol as f32 / 255.0) * 100.0);
+                        }
                     }
                     if let Some(t) = telemetry {
                         ui.set_headset_active(t.is_active);
                         ui.set_headset_status(if t.is_active {
-                            "Active (Powered On)".into()
+                            "ACTIVE".into()
                         } else {
-                            "Standby (Headset Off)".into()
+                            "STANDBY".into()
                         });
                         ui.set_headset_battery(if let Some(b) = t.battery_percent {
                             format!("{}%", b).into()
                         } else if t.is_active {
-                            "Connected".into()
+                            "ACTIVE".into()
                         } else {
-                            "Unavailable".into()
+                            "--".into()
                         });
                     }
                 }
@@ -1014,6 +1059,34 @@ async fn main() -> anyhow::Result<()> {
             let _ = client
                 .set_volume_raw(sonomux_device_goxlr::Channel::Headphones, raw)
                 .await;
+        });
+    });
+
+    let proxy_for_ch_vol = dbus_proxy.clone();
+    let goxlr_for_ch_vol = goxlr.clone();
+    main_window.on_channel_volume_changed(move |channel, val| {
+        let proxy = proxy_for_ch_vol.clone();
+        let client = goxlr_for_ch_vol.clone();
+        let ch_str = channel.to_string();
+        tokio::spawn(async move {
+            if let Some(ref p) = proxy {
+                if p.set_channel_volume(ch_str.clone(), val as f64).await.is_ok() {
+                    return;
+                }
+            }
+            let raw = ((val / 100.0).clamp(0.0, 1.0) * 255.0).round() as u8;
+            let ch = match ch_str.as_str() {
+                "System" => sonomux_device_goxlr::Channel::System,
+                "Game" => sonomux_device_goxlr::Channel::Game,
+                "Chat" => sonomux_device_goxlr::Channel::Chat,
+                "Music" => sonomux_device_goxlr::Channel::Music,
+                "Headphones" | "Speakers" => sonomux_device_goxlr::Channel::Headphones,
+                "Mic" => sonomux_device_goxlr::Channel::Mic,
+                "LineIn" => sonomux_device_goxlr::Channel::LineIn,
+                "LineOut" => sonomux_device_goxlr::Channel::LineOut,
+                _ => return,
+            };
+            let _ = client.set_volume_raw(ch, raw).await;
         });
     });
 

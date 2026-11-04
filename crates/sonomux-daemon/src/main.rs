@@ -47,6 +47,10 @@ async fn main() -> anyhow::Result<()> {
         headset_active: false,
         battery_pct: 0,
         speaker_volume: (initial_vol as f64 / 255.0) * 100.0,
+        system_volume: 100.0,
+        game_volume: 85.0,
+        chat_volume: 90.0,
+        music_volume: 70.0,
         loopback_active: false,
     }));
 
@@ -99,6 +103,7 @@ async fn main() -> anyhow::Result<()> {
     info!("Sonomux daemon initialized and watching audio graph.");
 
     let mut ticker = tokio::time::interval(Duration::from_millis(config.daemon.check_interval_ms));
+    let mut fader_ticker = tokio::time::interval(Duration::from_millis(100));
 
     #[cfg(unix)]
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok();
@@ -148,7 +153,29 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
 
-            // 2. Periodic topology & routing maintenance tick
+            // 2. Fast GoXLR hardware fader polling (100ms) for responsive GUI sync
+            _ = fader_ticker.tick() => {
+                if let Ok(vols) = goxlr.get_all_volumes().await {
+                    let mut s = shared_state.lock().await;
+                    if let Some(&v) = vols.get("Headphones") {
+                        s.speaker_volume = (v as f64 / 255.0) * 100.0;
+                    }
+                    if let Some(&v) = vols.get("System") {
+                        s.system_volume = (v as f64 / 255.0) * 100.0;
+                    }
+                    if let Some(&v) = vols.get("Game") {
+                        s.game_volume = (v as f64 / 255.0) * 100.0;
+                    }
+                    if let Some(&v) = vols.get("Chat") {
+                        s.chat_volume = (v as f64 / 255.0) * 100.0;
+                    }
+                    if let Some(&v) = vols.get("Music") {
+                        s.music_volume = (v as f64 / 255.0) * 100.0;
+                    }
+                }
+            }
+
+            // 3. Periodic topology & routing maintenance tick
             _ = ticker.tick() => {
                 let goxlr_up = goxlr.status().await == DeviceStatus::Active
                     && PulseManager::source_exists(&config.devices.goxlr_mix_source).await;

@@ -215,6 +215,18 @@ impl GoXLRClient {
         let vol = mixer.levels.volumes.get("Headphones").copied().unwrap_or(0);
         Ok(vol)
     }
+
+    /// Get current volumes for all mixer channels in raw 0-255.
+    pub async fn get_all_volumes(&self) -> Result<std::collections::HashMap<String, u8>, DeviceError> {
+        let status = self.get_status().await?;
+        let serial = self.get_serial().await?;
+        let mixer = status
+            .mixers
+            .get(&serial)
+            .ok_or_else(|| DeviceError::NotFound(format!("Mixer {} not in status", serial)))?;
+
+        Ok(mixer.levels.volumes.clone())
+    }
 }
 
 #[async_trait]

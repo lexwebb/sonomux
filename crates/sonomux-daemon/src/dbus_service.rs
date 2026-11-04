@@ -8,6 +8,10 @@ pub struct SharedDaemonState {
     pub headset_active: bool,
     pub battery_pct: u8,
     pub speaker_volume: f64,
+    pub system_volume: f64,
+    pub game_volume: f64,
+    pub chat_volume: f64,
+    pub music_volume: f64,
     pub loopback_active: bool,
 }
 
@@ -32,6 +36,58 @@ impl SonomuxDbusService {
             s.speaker_volume,
             s.loopback_active,
         )
+    }
+
+    /// Get all GoXLR channel volumes in percentages (0.0 to 100.0).
+    async fn get_channel_volumes(&self) -> std::collections::HashMap<String, f64> {
+        let s = self.state.lock().await;
+        let mut map = std::collections::HashMap::new();
+        map.insert("System".into(), s.system_volume);
+        map.insert("Game".into(), s.game_volume);
+        map.insert("Chat".into(), s.chat_volume);
+        map.insert("Music".into(), s.music_volume);
+        map.insert("Headphones".into(), s.speaker_volume);
+        map
+    }
+
+    /// Set volume for any GoXLR channel by name (0.0 to 100.0).
+    async fn set_channel_volume(&self, channel: String, volume_pct: f64) -> zbus::fdo::Result<()> {
+        let goxlr = self.goxlr.clone();
+        let state = Arc::clone(&self.state);
+
+        self.tokio_handle
+            .spawn(async move {
+                let raw = ((volume_pct / 100.0).clamp(0.0, 1.0) * 255.0).round() as u8;
+                let ch = match channel.as_str() {
+                    "System" => sonomux_device_goxlr::Channel::System,
+                    "Game" => sonomux_device_goxlr::Channel::Game,
+                    "Chat" => sonomux_device_goxlr::Channel::Chat,
+                    "Music" => sonomux_device_goxlr::Channel::Music,
+                    "Headphones" | "Speakers" => sonomux_device_goxlr::Channel::Headphones,
+                    "Mic" => sonomux_device_goxlr::Channel::Mic,
+                    "LineIn" => sonomux_device_goxlr::Channel::LineIn,
+                    "LineOut" => sonomux_device_goxlr::Channel::LineOut,
+                    _ => return Err(zbus::fdo::Error::InvalidArgs(format!("Unknown channel: {}", channel))),
+                };
+
+                goxlr
+                    .set_volume_raw(ch, raw)
+                    .await
+                    .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
+
+                let mut s = state.lock().await;
+                match channel.as_str() {
+                    "System" => s.system_volume = volume_pct,
+                    "Game" => s.game_volume = volume_pct,
+                    "Chat" => s.chat_volume = volume_pct,
+                    "Music" => s.music_volume = volume_pct,
+                    "Headphones" | "Speakers" => s.speaker_volume = volume_pct,
+                    _ => {}
+                }
+                Ok(())
+            })
+            .await
+            .map_err(|e| zbus::fdo::Error::Failed(format!("Task execution error: {}", e)))?
     }
 
     /// Set GoXLR desk speaker volume (0.0 to 100.0).
