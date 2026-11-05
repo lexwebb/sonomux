@@ -14,6 +14,31 @@ echo "🎛️ Installing Sonomux..."
 echo "📦 Building release workspace..."
 cargo build --release --workspace
 
+# Hardware helpers are optional (AGENTS.md rule 5): only suggest the ones for hardware that is
+# plugged in, and never install them.
+has_usb_vendor() { # $1 = vendor ID, 4 hex digits
+  if [ "$(uname -s)" = "Darwin" ]; then
+    ioreg -p IOUSB -l -w0 2>/dev/null | grep -q "\"idVendor\" = $((16#$1))\b"
+  else
+    grep -qsi "^$1$" /sys/bus/usb/devices/*/idVendor
+  fi
+}
+hardware_hints() {
+  if has_usb_vendor 1220 && ! command -v goxlr-daemon >/dev/null 2>&1 \
+    && [ ! -d "/Applications/GoXLR Utility.app" ]; then
+    echo "🎚️ GoXLR detected. For GoXLR control, install GoXLR Utility:"
+    if [ "$(uname -s)" = "Darwin" ]; then
+      echo "   https://github.com/GoXLR-on-Linux/goxlr-utility/releases"
+    else
+      echo "   Arch: yay -S goxlr-utility · others: https://github.com/GoXLR-on-Linux/goxlr-utility"
+    fi
+  fi
+  if has_usb_vendor 1038 && ! command -v headsetcontrol >/dev/null 2>&1; then
+    echo "🎧 SteelSeries device detected. For headset presence and battery, install headsetcontrol:"
+    echo "   https://github.com/Sapd/HeadsetControl (Arch: pacman -S headsetcontrol)"
+  fi
+}
+
 # macOS: launchd agent instead of systemd/D-Bus/XDG desktop files.
 if [ "$(uname -s)" = "Darwin" ]; then
   BIN_DIR="${HOME}/.local/bin"
@@ -46,6 +71,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
   launchctl bootstrap "${DOMAIN}" "${TRAY_AGENT}"
 
   echo ""
+  hardware_hints
   echo "✅ Sonomux installed and running (log: ~/Library/Logs/sonomuxd.log)."
   echo "   Run 'sonomuxctl status' or launch 'sonomux' GUI to verify."
   exit 0
@@ -100,5 +126,6 @@ systemctl --user enable --now sonomuxd.service
 systemctl --user enable --now sonomux-tray.service || echo "⚠️ No graphical session: sonomux-tray starts at next login."
 
 echo ""
+hardware_hints
 echo "✅ Sonomux installed and running successfully!"
 echo "   Run 'sonomuxctl status' or launch 'sonomux' GUI to verify."

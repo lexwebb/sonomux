@@ -16,8 +16,18 @@ use tracing::{debug, info, warn};
 /// (source hardware UID, target hardware UID, target first channel 0-based).
 pub type RouteKey = (String, String, usize);
 
-/// Live routes: the processes each tap covers, and the tap.
-type Live = HashMap<RouteKey, (Vec<u32>, AppRoute)>;
+/// Live routes: the processes each tap covers, the device IDs it was built on, frames seen at
+/// the last tick, and the tap.
+type Live = HashMap<RouteKey, (Vec<u32>, DeviceIds, u64, AppRoute)>;
+
+/// Object IDs of a route's source and target hardware. A device that comes back after sleep
+/// or a replug gets a new ID and the old tap goes silent, so a changed ID means rebuild.
+type DeviceIds = (Option<u32>, Option<u32>);
+
+fn device_ids(key: &RouteKey, all: &[Device]) -> DeviceIds {
+    let id = |uid: &str| all.iter().find(|d| d.uid == uid).map(|d| d.id);
+    (id(&key.0), id(&key.1))
+}
 
 fn routes() -> &'static Mutex<Live> {
     static ROUTES: OnceLock<Mutex<Live>> = OnceLock::new();
@@ -134,10 +144,18 @@ pub fn sync(routing: &RoutingConfig, devices: &DevicesConfig) -> usize {
     );
 
     let mut live = routes().lock().unwrap();
-    live.retain(|key, (procs, _)| {
-        let keep = desired.get(key) == Some(procs);
+    live.retain(|key, (procs, ids, frames, route)| {
+        // A tap only counts frames while its apps play. One whose apps play but whose frames
+        // stopped is dead (its hardware slept or was replugged): rebuild it.
+        let playing = streams
+            .iter()
+            .any(|s| !s.is_corked && procs.contains(&(s.index as u32)));
+        let now = route.frames();
+        let alive = !playing || now > *frames;
+        *frames = now;
+        let keep = desired.get(key) == Some(procs) && *ids == device_ids(key, &all) && alive;
         if !keep {
-            debug!("Dropping route {:?}", key);
+            debug!("Dropping route {:?} (alive: {})", key, alive);
         }
         keep
     });
@@ -160,12 +178,13 @@ pub fn sync(routing: &RoutingConfig, devices: &DevicesConfig) -> usize {
                     first + 1,
                     first + 2
                 );
-                live.insert(key, (procs, route));
+                let ids = device_ids(&key, &all);
+                live.insert(key, (procs, ids, 0, route));
             }
             Err(e) => warn!("Could not route {:?}: {}", key, e),
         }
     }
-    live.values().map(|(p, _)| p.len()).sum()
+    live.values().map(|(p, ..)| p.len()).sum()
 }
 
 /// Drop every route, restoring all apps' normal output.

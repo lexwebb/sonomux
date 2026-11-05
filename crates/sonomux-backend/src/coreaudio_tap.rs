@@ -82,6 +82,12 @@ pub(crate) fn dict(pairs: &[(&CStr, &AnyObject)]) -> Retained<NSDictionary<NSStr
 }
 
 impl AppRoute {
+    /// Frames processed so far. Stops growing once the HAL stops the IOProc, e.g. when its
+    /// hardware went away during sleep.
+    pub fn frames(&self) -> u64 {
+        unsafe { &*self.state }.frames.load(Ordering::Relaxed)
+    }
+
     /// Tap `processes` (HAL process object IDs) and play them on `device_uid` starting at
     /// output channel `first_channel` (0-based).
     /// Tap `processes` (HAL process object IDs) on hardware device `source_uid` and play them
