@@ -22,6 +22,9 @@ pub struct SonomuxDbusService {
     pub goxlr: sonomux_device_goxlr::GoXLRClient,
     pub config: Arc<Mutex<sonomux_core::AppConfig>>,
     pub tokio_handle: tokio::runtime::Handle,
+    /// Asks the main loop for a routing pass with the latest config. Handlers never route
+    /// themselves, so passes never overlap or run on a stale config.
+    pub routing_kick: Arc<tokio::sync::Notify>,
 }
 
 #[interface(name = "org.sonomux.Daemon")]
@@ -169,20 +172,11 @@ impl SonomuxDbusService {
                     &keep_off,
                 )
                 .await;
-
-                if config.routing.enabled {
-                    sonomux_backend::Backend::enforce_stream_routing(
-                        &config.routing,
-                        &config.devices,
-                        &config.policies,
-                    )
-                    .await
-                    .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
-                }
-                Ok(())
             })
             .await
-            .map_err(|e| zbus::fdo::Error::Failed(format!("Task execution error: {}", e)))?
+            .map_err(|e| zbus::fdo::Error::Failed(format!("Task execution error: {}", e)))?;
+        self.routing_kick.notify_one();
+        Ok(())
     }
 
     /// Return live detected streams: (index, app_name, binary, category, current_sink)
@@ -214,18 +208,7 @@ impl SonomuxDbusService {
         cfg.routing.enabled = enabled;
         cfg.save()
             .map_err(|e| zbus::fdo::Error::Failed(format!("Could not save config: {}", e)))?;
-        if enabled {
-            let r = cfg.routing.clone();
-            let d = cfg.devices.clone();
-            let p = cfg.policies.clone();
-            self.tokio_handle.spawn(async move {
-                let _ = sonomux_backend::Backend::enforce_stream_routing(&r, &d, &p).await;
-            });
-        } else {
-            self.tokio_handle.spawn(async move {
-                sonomux_backend::Backend::stop_stream_routing().await;
-            });
-        }
+        self.routing_kick.notify_one();
         Ok(())
     }
 
@@ -237,14 +220,7 @@ impl SonomuxDbusService {
             .insert(category.to_lowercase(), target);
         cfg.save()
             .map_err(|e| zbus::fdo::Error::Failed(format!("Could not save config: {}", e)))?;
-        if cfg.routing.enabled {
-            let r = cfg.routing.clone();
-            let d = cfg.devices.clone();
-            let p = cfg.policies.clone();
-            self.tokio_handle.spawn(async move {
-                let _ = sonomux_backend::Backend::enforce_stream_routing(&r, &d, &p).await;
-            });
-        }
+        self.routing_kick.notify_one();
         Ok(())
     }
 
@@ -283,14 +259,7 @@ impl SonomuxDbusService {
         }
         cfg.save()
             .map_err(|e| zbus::fdo::Error::Failed(format!("Could not save config: {}", e)))?;
-        let (r, d, p) = (
-            cfg.routing.clone(),
-            cfg.devices.clone(),
-            cfg.policies.clone(),
-        );
-        self.tokio_handle.spawn(async move {
-            let _ = sonomux_backend::Backend::enforce_stream_routing(&r, &d, &p).await;
-        });
+        self.routing_kick.notify_one();
         Ok(())
     }
 

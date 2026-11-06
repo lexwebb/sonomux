@@ -53,6 +53,7 @@ async fn main() -> anyhow::Result<()> {
     }));
 
     let config_shared = Arc::new(Mutex::new(config.clone()));
+    let routing_kick = Arc::new(tokio::sync::Notify::new());
 
     // Start D-Bus session service if enabled
     if config.daemon.dbus_enabled {
@@ -61,6 +62,7 @@ async fn main() -> anyhow::Result<()> {
             goxlr: goxlr.clone(),
             config: Arc::clone(&config_shared),
             tokio_handle: tokio::runtime::Handle::current(),
+            routing_kick: Arc::clone(&routing_kick),
         };
 
         #[cfg(target_os = "macos")]
@@ -251,17 +253,7 @@ async fn main() -> anyhow::Result<()> {
                     }
 
                     // Enforce intelligent stream classification & routing policies
-                    if routing_should_run(goxlr_up, current_cfg.routing.enabled) {
-                        if let Err(e) = Backend::enforce_stream_routing(
-                            &current_cfg.routing,
-                            &current_cfg.devices,
-                            &current_cfg.policies,
-                        ).await {
-                            debug!("Stream routing enforcement error: {}", e);
-                        }
-                    } else {
-                        Backend::stop_stream_routing().await;
-                    }
+                    routing_pass(&current_cfg, true).await;
 
                     // Evaluate rules on maintenance tick
                     evaluate_and_dispatch(
@@ -278,8 +270,14 @@ async fn main() -> anyhow::Result<()> {
                         warn!("GoXLR disconnected or suspended.");
                     }
                     goxlr_was_up = false;
-                    Backend::stop_stream_routing().await;
+                    routing_pass(&current_cfg, false).await;
                 }
+            }
+
+            // 2b. Routing requested over IPC (override, category, toggle): run it now with the latest config
+            _ = routing_kick.notified() => {
+                let cfg = config_shared.lock().await.clone();
+                routing_pass(&cfg, goxlr_was_up).await;
             }
 
             // 3. Graceful shutdown on Ctrl+C or SIGTERM
@@ -318,6 +316,20 @@ async fn main() -> anyhow::Result<()> {
 /// must be released, or tapped apps stay muted on a channel nobody hears.
 fn routing_should_run(goxlr_up: bool, routing_enabled: bool) -> bool {
     goxlr_up && routing_enabled
+}
+
+/// The only place routing runs: apply the rules when routing should run, otherwise release
+/// every route. Called from the main loop only, so passes never overlap.
+async fn routing_pass(cfg: &AppConfig, goxlr_up: bool) {
+    if routing_should_run(goxlr_up, cfg.routing.enabled) {
+        if let Err(e) =
+            Backend::enforce_stream_routing(&cfg.routing, &cfg.devices, &cfg.policies).await
+        {
+            debug!("Stream routing enforcement error: {}", e);
+        }
+    } else {
+        Backend::stop_stream_routing().await;
+    }
 }
 
 /// The rules the engine should run on this OS. macOS can't loopback audio to the headset yet,
@@ -467,5 +479,22 @@ mod tests {
         assert!(!routing_should_run(true, false));
         assert!(!routing_should_run(false, true));
         assert!(!routing_should_run(false, false));
+    }
+
+    #[tokio::test]
+    async fn routing_kicks_are_kept_and_coalesced() {
+        let kick = std::sync::Arc::new(tokio::sync::Notify::new());
+        kick.notify_one();
+        kick.notify_one();
+        // The stored permit wakes one waiter immediately...
+        tokio::time::timeout(std::time::Duration::from_millis(100), kick.notified())
+            .await
+            .expect("kick sent before waiting must not be lost");
+        // ...and the two kicks merged: nothing left.
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), kick.notified())
+                .await
+                .is_err()
+        );
     }
 }

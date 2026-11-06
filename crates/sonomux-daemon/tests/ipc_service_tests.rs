@@ -68,6 +68,7 @@ impl Fixture {
             goxlr: GoXLRClient::new(&mock.socket),
             config: Arc::clone(&config),
             tokio_handle: tokio::runtime::Handle::current(),
+            routing_kick: Arc::new(tokio::sync::Notify::new()),
         };
         let (_server, client) = serve(svc).await;
         Self {

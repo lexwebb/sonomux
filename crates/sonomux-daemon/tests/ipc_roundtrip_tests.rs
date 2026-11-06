@@ -35,6 +35,7 @@ async fn shared_proxy_agrees_with_service_on_read_methods() {
         goxlr: GoXLRClient::new(dir.join("no-goxlr.socket")),
         config: Arc::new(Mutex::new(AppConfig::default())),
         tokio_handle: tokio::runtime::Handle::current(),
+        routing_kick: Arc::new(tokio::sync::Notify::new()),
     };
 
     let (a, b) = std::os::unix::net::UnixStream::pair().unwrap();

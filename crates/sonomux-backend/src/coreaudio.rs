@@ -509,12 +509,19 @@ impl CoreAudioManager {
         devices: &DevicesConfig,
         _policies: &PoliciesConfig,
     ) -> Result<usize, BackendError> {
-        Ok(crate::coreaudio_routing::sync(routing_config, devices))
+        // Blocking HAL calls: keep them off the async worker threads.
+        let (r, d) = (routing_config.clone(), devices.clone());
+        tokio::task::spawn_blocking(move || crate::coreaudio_routing::sync(&r, &d))
+            .await
+            .map_err(|e| BackendError::Routing(format!("routing task failed: {}", e)))
     }
 
     /// Release every routed app back to its normal output. Returns how many routes were dropped.
     pub async fn stop_stream_routing() -> usize {
-        let n = crate::coreaudio_routing::clear();
+        // Dropping routes makes HAL calls: keep them off the async worker threads.
+        let n = tokio::task::spawn_blocking(crate::coreaudio_routing::clear)
+            .await
+            .unwrap_or(0);
         if n > 0 {
             tracing::info!("Routing stopped: released {} route(s)", n);
         }
