@@ -1,3 +1,6 @@
+// ENV_LOCK is held across awaits on purpose: PATH/XDG env vars are process-global.
+#![allow(clippy::await_holding_lock)]
+
 mod common;
 
 use common::{mock_goxlr, shared_state, temp_dir, MockGoxlr};
