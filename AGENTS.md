@@ -19,17 +19,19 @@ crates/
 │                            # Linux: PipeWire / PulseAudio (PulseManager): loopbacks, stream pinning, volume traversal.
 │                            # macOS: CoreAudio (CoreAudioManager): devices, playing apps, per-channel GoXLR devices
 │                            # (coreaudio_channels), per-app routing via process taps (coreaudio_tap).
+│                            # routing_logic.rs: pure per-app routing decisions (no CoreAudio calls), compiled and tested on every platform.
 ├── sonomux-device-headset/  # Headset presence detection & battery telemetry via HID / headsetcontrol.
 │                            # State debouncing and event streaming (HeadsetMonitor).
 ├── sonomux-device-goxlr/    # GoXLR Mini hardware client (GoXlrClient) via Unix domain socket IPC (/tmp/goxlr.socket).
 ├── sonomux-daemon/          # Background service (sonomuxd).
 │                            # Orchestrates device loops, executes declarative rules (ActionExecutor),
 │                            # and hosts the session D-Bus interface (org.sonomux.Daemon via zbus).
+│                            # Also a lib target (src/lib.rs: dbus_service, executor, state), and ships
+│                            # the CLI controller sonomuxctl (src/bin/sonomuxctl.rs).
 ├── sonomux-gui/             # Native Slint GUI (sonomux). Real-time fader control, battery indicators,
 │                            # mute toggles, and live D-Bus connection badge.
-├── sonomux-tray/            # Menu bar extra (macOS, AppKit) / tray icon (Linux, StatusNotifierItem).
-│                            # Mirrors the Omarchy widget; status text comes from sonomux_core::status.
-└── sonomux-cli/             # CLI controller (sonomuxctl). Interacts with sonomuxd via D-Bus IPC.
+└── sonomux-tray/            # Menu bar extra (macOS, AppKit) / tray icon (Linux, StatusNotifierItem).
+                             # Mirrors the Omarchy widget; status text comes from sonomux_core::status.
 
 dist/                        # Deployment, packaging, and integration assets:
 ├── systemd/                 # User systemd service (sonomuxd.service)
