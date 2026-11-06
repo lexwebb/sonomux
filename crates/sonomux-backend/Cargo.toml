@@ -7,7 +7,6 @@ repository.workspace = true
 
 [dependencies]
 sonomux-core = { path = "../sonomux-core" }
-async-trait.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true

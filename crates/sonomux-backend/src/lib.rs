@@ -11,7 +11,6 @@ pub mod coreaudio_tap;
 pub mod pulse;
 pub mod routing_logic;
 
-use async_trait::async_trait;
 pub use pulse::PulseManager;
 
 /// The audio backend for the current OS.
@@ -29,9 +28,4 @@ pub enum BackendError {
     NotFound(String),
     #[error("Routing error: {0}")]
     Routing(String),
-}
-
-#[async_trait]
-pub trait AudioBackend: Send + Sync {
-    async fn resolve_effective_sink(&self, sink_name: &str) -> Result<String, BackendError>;
 }
