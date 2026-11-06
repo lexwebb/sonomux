@@ -42,6 +42,47 @@ impl Default for Rule {
     }
 }
 
+/// For platforms without loopback support: in each rule that creates or destroys a loopback,
+/// drop the loopback actions and the hardware-volume save/set/restore actions that only make
+/// sense alongside it (muting the speakers while the headset gets nothing would leave the user
+/// with no audio). Other actions and rules are untouched. Returns the rules and the names of
+/// the rules that changed.
+pub fn without_loopback_actions(rules: Vec<Rule>) -> (Vec<Rule>, Vec<String>) {
+    fn is_loopback(a: &Action) -> bool {
+        matches!(
+            a,
+            Action::EnsureLoopback { .. } | Action::DestroyLoopback { .. }
+        )
+    }
+    fn is_dependent(a: &Action) -> bool {
+        is_loopback(a)
+            || matches!(
+                a,
+                Action::SaveHardwareVolume { .. }
+                    | Action::SetHardwareVolume { .. }
+                    | Action::RestoreHardwareVolume { .. }
+            )
+    }
+    let mut changed = Vec::new();
+    let out = rules
+        .into_iter()
+        .map(|mut rule| {
+            let uses_loopback = rule
+                .actions_on_enter
+                .iter()
+                .chain(rule.actions_on_exit.iter())
+                .any(is_loopback);
+            if uses_loopback {
+                rule.actions_on_enter.retain(|a| !is_dependent(a));
+                rule.actions_on_exit.retain(|a| !is_dependent(a));
+                changed.push(rule.name.clone());
+            }
+            rule
+        })
+        .collect();
+    (out, changed)
+}
+
 pub fn default_rules() -> Vec<Rule> {
     let dev = crate::config::DevicesConfig::default();
     vec![Rule {

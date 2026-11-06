@@ -1,5 +1,5 @@
 use sonomux_backend::Backend;
-use sonomux_core::rules::{RuleContext, RuleEngine};
+use sonomux_core::rules::{Rule, RuleContext, RuleEngine};
 use sonomux_core::traits::{AudioDevice, DeviceEvent, DeviceStatus};
 use sonomux_core::AppConfig;
 use sonomux_daemon::dbus_service::{SharedDaemonState, SonomuxDbusService};
@@ -98,7 +98,9 @@ async fn main() -> anyhow::Result<()> {
 
     let mut goxlr_was_up = false;
     let mut current_loopback_id: Option<u32> = None;
-    let mut rule_engine = RuleEngine::new(config.rules.clone());
+    let (startup_rules, changed_rules) = effective_rules(&config.rules);
+    log_trimmed_rules(&changed_rules);
+    let mut rule_engine = RuleEngine::new(startup_rules);
 
     info!(
         "Rule engine loaded {} declarative rule(s).",
@@ -318,6 +320,26 @@ fn routing_should_run(goxlr_up: bool, routing_enabled: bool) -> bool {
     goxlr_up && routing_enabled
 }
 
+/// The rules the engine should run on this OS. macOS can't loopback audio to the headset yet,
+/// so rules that rely on one keep only their other actions.
+// ponytail: remove the macOS branch (and without_loopback_actions) when macOS loopback ships; plan 014.
+fn effective_rules(rules: &[Rule]) -> (Vec<Rule>, Vec<String>) {
+    #[cfg(target_os = "macos")]
+    {
+        sonomux_core::rules::without_loopback_actions(rules.to_vec())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        (rules.to_vec(), Vec::new())
+    }
+}
+
+fn log_trimmed_rules(names: &[String]) {
+    for name in names {
+        info!("Rule '{}': skipping its speaker mute and loopback on macOS (headset loopback isn't supported yet)", name);
+    }
+}
+
 async fn evaluate_and_dispatch(
     headset: &HeadsetMonitor,
     goxlr: &GoXLRClient,
@@ -329,8 +351,12 @@ async fn evaluate_and_dispatch(
 ) {
     // Pick up rule edits (e.g. the GUI's rule switches). Disabled or removed rules that were
     // active exit here, so their exit actions (like restoring the speakers) still run.
-    if rule_engine.rules() != config.rules.as_slice() {
-        let exits = rule_engine.set_rules(config.rules.clone());
+    // Compare filtered against filtered, or a trimmed engine would differ from the raw config
+    // on every tick.
+    let (wanted, changed) = effective_rules(&config.rules);
+    if rule_engine.rules() != wanted.as_slice() {
+        log_trimmed_rules(&changed);
+        let exits = rule_engine.set_rules(wanted);
         if !exits.is_empty() {
             let mut executor = ActionExecutor {
                 goxlr,
