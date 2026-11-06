@@ -93,7 +93,8 @@ REPORT_OUTPUT=$(llvm-cov report \
   --instr-profile="${COVERAGE_DIR}/sonomux.profdata" \
   "${FIRST_BIN}" \
   "${OBJECT_ARGS[@]}" \
-  --ignore-filename-regex="${IGNORE_REGEX}")
+  --ignore-filename-regex="${IGNORE_REGEX}" \
+  "${ROOT_DIR}/crates")
 
 echo "${REPORT_OUTPUT}"
 echo "================================================================================"
@@ -144,7 +145,8 @@ llvm-cov show \
   --instr-profile="${COVERAGE_DIR}/sonomux.profdata" \
   "${FIRST_BIN}" \
   "${OBJECT_ARGS[@]}" \
-  --ignore-filename-regex="${IGNORE_REGEX}" >/dev/null 2>&1 || true
+  --ignore-filename-regex="${IGNORE_REGEX}" \
+  "${ROOT_DIR}/crates" >/dev/null 2>&1 || true
 
 echo "🌐 HTML report: file://${ROOT_DIR}/${HTML_DIR}/index.html"
 
