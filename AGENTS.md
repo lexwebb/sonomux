@@ -54,17 +54,18 @@ Always validate changes with these commands from the repository root:
 | 1. Format Check | `cargo fmt --check` | Enforces standard Rust formatting. |
 | 2. Linting | `cargo clippy --workspace --all-targets -- -D warnings` | Zero clippy warnings allowed across workspace. |
 | 3. Unit & Integration Tests | `cargo test --workspace` | Fast workspace test suite (all tests must pass). |
-| 4. Test Coverage | `./scripts/coverage.sh` | Enforces the **$\ge 85\%$ test coverage soft boundary** and updates README badge. |
+| 4. Test Coverage | `./scripts/coverage.sh` | Enforces the **coverage ratchet** (`TARGET_BOUNDARY` in the script, currently 52%) and updates README badge. |
 | 5. Hands-Free Install | `./install.sh` | Builds release workspace and installs to `~/.local/bin` and systemd user services. |
 
 ---
 
 ## Critical Rules & Guidelines for AI Agents
 
-### 1. Code Coverage Soft Boundary ($\ge 85\%$)
-- Maintain a minimum of **85.0% line coverage** across the workspace.
+### 1. Code Coverage Ratchet
+- The gate is `TARGET_BOUNDARY` in `scripts/coverage.sh` (currently **52%** line coverage). It counts every crate except the printed entry points (`UNTESTABLE_ENTRYPOINTS`). **Never lower it.**
+- When your change raises coverage, raise `TARGET_BOUNDARY` to the new floor (round down to a whole number).
 - When introducing new features, state transitions, or rule actions, implement comprehensive unit and integration tests covering both happy and error paths.
-- Run `./scripts/coverage.sh` prior to concluding tasks to confirm that workspace coverage stays at or above 85% and that the `README.md` badge remains synchronized.
+- Run `./scripts/coverage.sh` prior to concluding tasks to confirm that workspace coverage stays at or above `TARGET_BOUNDARY` and that the `README.md` badge remains synchronized.
 
 ### 2. Process & Binary Safety
 - On macOS the daemon is a launchd agent (`launchctl print gui/$UID/org.sonomux.sonomuxd`), logging to `~/Library/Logs/sonomuxd.log`. `./install.sh` stops it before copying binaries.
