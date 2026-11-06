@@ -7,21 +7,10 @@ mod linux;
 #[cfg(target_os = "macos")]
 mod mac;
 
+use sonomux_core::ipc::SonomuxDaemonProxy;
 use sonomux_core::status::{summarize, Summary};
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedReceiver;
-use zbus::proxy;
-
-#[proxy(
-    interface = "org.sonomux.Daemon",
-    default_service = "org.sonomux.Daemon",
-    default_path = "/org/sonomux/Daemon"
-)]
-trait SonomuxDaemon {
-    async fn get_status(&self) -> zbus::Result<(bool, String, bool, u8, f64, bool)>;
-    async fn set_speaker_volume(&self, volume: f64) -> zbus::Result<()>;
-    async fn toggle_speaker_mute(&self) -> zbus::Result<bool>;
-}
 
 /// What the menu asks the daemon to do.
 #[derive(Debug)]
