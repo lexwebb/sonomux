@@ -11,12 +11,18 @@ use tracing::{debug, info};
 
 pub const DEFAULT_GOXLR_SOCKET: &str = "/tmp/goxlr.socket";
 
+/// How long one request to GoXLR Utility may take before it counts as unreachable.
+pub const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+/// Largest reply accepted. A full status is a few tens of KB.
+const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
 #[derive(Clone)]
 pub struct GoXLRClient {
     socket_path: PathBuf,
     serial: Arc<Mutex<Option<String>>>,
     metadata: DeviceMetadata,
     event_tx: broadcast::Sender<DeviceEvent>,
+    timeout: std::time::Duration,
 }
 
 impl Default for GoXLRClient {
@@ -38,11 +44,30 @@ impl GoXLRClient {
                 capabilities: vec!["routing_matrix".to_string(), "hardware_volume".to_string()],
             },
             event_tx: tx,
+            timeout: REQUEST_TIMEOUT,
         }
     }
 
-    /// Connect and send a raw JSON request with 4-byte Big Endian length framing.
+    /// Use a different request timeout (tests use a short one).
+    pub fn with_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
+    /// Connect and send a raw JSON request, bounded by the client's timeout.
     async fn request(&self, req_json: &Value) -> Result<String, DeviceError> {
+        tokio::time::timeout(self.timeout, self.request_inner(req_json))
+            .await
+            .map_err(|_| {
+                DeviceError::Communication(format!(
+                    "GoXLR Utility did not answer within {} ms",
+                    self.timeout.as_millis()
+                ))
+            })?
+    }
+
+    /// Send a raw JSON request with 4-byte Big Endian length framing.
+    async fn request_inner(&self, req_json: &Value) -> Result<String, DeviceError> {
         let payload = serde_json::to_vec(req_json)
             .map_err(|e| DeviceError::Internal(format!("Failed to serialize request: {}", e)))?;
 
@@ -73,6 +98,12 @@ impl GoXLRClient {
             DeviceError::Communication(format!("Failed to read response length: {}", e))
         })?;
         let resp_len = u32::from_be_bytes(resp_len_buf) as usize;
+        if resp_len > MAX_RESPONSE_BYTES {
+            return Err(DeviceError::Communication(format!(
+                "GoXLR Utility reply too large ({} bytes)",
+                resp_len
+            )));
+        }
 
         let mut resp_buf = vec![0u8; resp_len];
         stream.read_exact(&mut resp_buf).await.map_err(|e| {

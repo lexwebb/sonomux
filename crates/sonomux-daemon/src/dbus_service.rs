@@ -132,22 +132,17 @@ impl SonomuxDbusService {
                     .await
                     .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
 
-                let mut s = state.lock().await;
-                if curr > 0 {
-                    goxlr
-                        .set_volume_raw(sonomux_device_goxlr::Channel::Headphones, 0)
-                        .await
-                        .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
-                    s.speaker_volume = 0.0;
-                    Ok(true)
+                let (raw, pct, muted) = if curr > 0 {
+                    (0, 0.0, true)
                 } else {
-                    goxlr
-                        .set_volume_raw(sonomux_device_goxlr::Channel::Headphones, 255)
-                        .await
-                        .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
-                    s.speaker_volume = 100.0;
-                    Ok(false)
-                }
+                    (255, 100.0, false)
+                };
+                goxlr
+                    .set_volume_raw(sonomux_device_goxlr::Channel::Headphones, raw)
+                    .await
+                    .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
+                state.lock().await.speaker_volume = pct;
+                Ok(muted)
             })
             .await
             .map_err(|e| zbus::fdo::Error::Failed(format!("Task execution error: {}", e)))?
