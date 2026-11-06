@@ -187,6 +187,7 @@ impl AppRoute {
             unsafe { AudioDeviceStart(aggregate, proc_id) },
             "AudioDeviceStart",
         )?;
+        crate::coreaudio::CoreAudioManager::invalidate_lists();
         Ok(route)
     }
 
@@ -210,6 +211,7 @@ impl Drop for AppRoute {
             // The IOProc is stopped and destroyed, so nothing else holds the state.
             drop(Box::from_raw(self.state));
         }
+        crate::coreaudio::CoreAudioManager::invalidate_lists();
     }
 }
 
