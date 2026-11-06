@@ -6,8 +6,13 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
 COVERAGE_DIR="target/coverage"
-# Ratchet: raise this whenever coverage rises; never lower it.
-TARGET_BOUNDARY="63.0"
+# Ratchet: raise these whenever coverage rises; never lower them. Each OS also measures its
+# own platform code (CoreAudio on macOS, the tray's Linux code on Linux), so each has a floor.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  TARGET_BOUNDARY="63.0"
+else
+  TARGET_BOUNDARY="70.0"
+fi
 STRICT_MODE=false
 
 if [[ "${1:-}" == "--strict" || "${CI:-}" == "true" ]]; then
