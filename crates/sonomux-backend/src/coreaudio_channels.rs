@@ -170,6 +170,7 @@ fn channel_names(id: u32, scope: u32) -> Vec<String> {
 pub fn ensure_split_devices(include_unpaired_inputs: bool) -> Vec<String> {
     let devices = CoreAudioManager::devices();
     let mut created = Vec::new();
+    let mut changed = false;
     for hw in &devices {
         let transport = get::<u32>(hw.id, TRANSPORT, SCOPE_GLOBAL).unwrap_or(0);
         if transport == TRANSPORT_AGGREGATE || transport == TRANSPORT_VIRTUAL {
@@ -188,6 +189,7 @@ pub fn ensure_split_devices(include_unpaired_inputs: bool) -> Vec<String> {
             let ours = d.uid.starts_with(UID_PREFIX) && d.uid.ends_with(&format!("::{}", hw.uid));
             if ours && !planned.iter().any(|s| s.uid == d.uid) {
                 let st = unsafe { AudioHardwareDestroyAggregateDevice(d.id) };
+                changed = true;
                 info!(
                     "Removed stale CoreAudio device '{}' (status {})",
                     d.name, st
@@ -200,6 +202,8 @@ pub fn ensure_split_devices(include_unpaired_inputs: bool) -> Vec<String> {
                 continue;
             }
             let result = create(&hw.uid, &split);
+            // Even a failed create may have briefly made (then removed) a device.
+            changed = true;
             let loud = first_failure(&mut warned().lock().unwrap(), &split.uid, result.is_ok());
             match result {
                 Ok(()) => {
@@ -218,6 +222,9 @@ pub fn ensure_split_devices(include_unpaired_inputs: bool) -> Vec<String> {
                 Err(e) => debug!("Could not create '{}': {}", split.name, e),
             }
         }
+    }
+    if changed {
+        CoreAudioManager::invalidate_lists();
     }
     created
 }
