@@ -178,3 +178,23 @@ async fn set_split_unpaired_updates_config() {
     f.proxy().await.set_split_unpaired(true).await.unwrap();
     assert!(f.config.lock().await.devices.split_unpaired_inputs);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn set_split_unpaired_reports_save_failure() {
+    let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let f = Fixture::new("savefail").await;
+    // Make XDG_CONFIG_HOME a regular file so creating <it>/sonomux/config.toml fails.
+    std::fs::remove_dir_all(&f.config_home).unwrap();
+    std::fs::write(&f.config_home, "not a directory").unwrap();
+    let err = f
+        .proxy()
+        .await
+        .set_split_unpaired(true)
+        .await
+        .expect_err("save failure must reach the caller");
+    assert!(
+        err.to_string().contains("Could not save config"),
+        "unexpected error: {err}"
+    );
+    let _ = std::fs::remove_file(&f.config_home);
+}

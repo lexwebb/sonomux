@@ -217,7 +217,8 @@ impl SonomuxDbusService {
     async fn set_routing_enabled(&self, enabled: bool) -> zbus::fdo::Result<()> {
         let mut cfg = self.config.lock().await;
         cfg.routing.enabled = enabled;
-        let _ = cfg.save();
+        cfg.save()
+            .map_err(|e| zbus::fdo::Error::Failed(format!("Could not save config: {}", e)))?;
         if enabled {
             let r = cfg.routing.clone();
             let d = cfg.devices.clone();
@@ -239,7 +240,8 @@ impl SonomuxDbusService {
         cfg.routing
             .category_targets
             .insert(category.to_lowercase(), target);
-        let _ = cfg.save();
+        cfg.save()
+            .map_err(|e| zbus::fdo::Error::Failed(format!("Could not save config: {}", e)))?;
         if cfg.routing.enabled {
             let r = cfg.routing.clone();
             let d = cfg.devices.clone();
@@ -284,7 +286,8 @@ impl SonomuxDbusService {
         } else {
             cfg.routing.app_overrides.insert(id, target);
         }
-        let _ = cfg.save();
+        cfg.save()
+            .map_err(|e| zbus::fdo::Error::Failed(format!("Could not save config: {}", e)))?;
         let (r, d, p) = (
             cfg.routing.clone(),
             cfg.devices.clone(),
@@ -362,7 +365,8 @@ impl SonomuxDbusService {
         };
         if slot.is_some() {
             *slot = Some(name);
-            let _ = cfg.save();
+            cfg.save()
+                .map_err(|e| zbus::fdo::Error::Failed(format!("Could not save config: {}", e)))?;
         }
         Ok(())
     }
@@ -378,7 +382,8 @@ impl SonomuxDbusService {
             cfg.devices.default_output = None;
             cfg.devices.default_input = None;
         }
-        let _ = cfg.save();
+        cfg.save()
+            .map_err(|e| zbus::fdo::Error::Failed(format!("Could not save config: {}", e)))?;
         Ok(())
     }
 
@@ -386,7 +391,8 @@ impl SonomuxDbusService {
     async fn set_split_unpaired(&self, enabled: bool) -> zbus::fdo::Result<()> {
         let mut cfg = self.config.lock().await;
         cfg.devices.split_unpaired_inputs = enabled;
-        let _ = cfg.save();
+        cfg.save()
+            .map_err(|e| zbus::fdo::Error::Failed(format!("Could not save config: {}", e)))?;
         Ok(())
     }
 
@@ -438,7 +444,8 @@ impl SonomuxDbusService {
         let mut cfg = self.config.lock().await;
         if let Some(r) = cfg.rules.iter_mut().find(|r| r.name == rule_name) {
             r.enabled = enabled;
-            let _ = cfg.save();
+            cfg.save()
+                .map_err(|e| zbus::fdo::Error::Failed(format!("Could not save config: {}", e)))?;
         }
         Ok(())
     }

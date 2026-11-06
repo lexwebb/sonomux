@@ -163,3 +163,86 @@ fn test_config_error_display() {
     let toml_err = ConfigError::Parse(toml::from_str::<AppConfig>("invalid = toml [").unwrap_err());
     assert!(format!("{}", toml_err).contains("Failed to parse TOML"));
 }
+
+/// Fresh temp XDG_CONFIG_HOME for one test. Caller holds ENV_LOCK.
+fn isolated_config_home(tag: &str) -> std::path::PathBuf {
+    let dir = env::temp_dir().join(format!("sonomux-cfg-{}-{}", tag, std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    unsafe {
+        env::set_var("XDG_CONFIG_HOME", &dir);
+    }
+    dir
+}
+
+#[test]
+fn test_save_is_atomic_and_private() {
+    let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = isolated_config_home("atomic");
+    let (mut cfg, path) = AppConfig::load_or_create().unwrap();
+    cfg.daemon.check_interval_ms = 3333;
+    cfg.save().unwrap();
+    let (reloaded, _) = AppConfig::load_or_create().unwrap();
+    assert_eq!(reloaded.daemon.check_interval_ms, 3333);
+    assert!(!path.parent().unwrap().join(".config.toml.tmp").exists());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn test_save_keeps_symlink() {
+    let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = isolated_config_home("symlink");
+    let real = dir.join("real-config.toml");
+    fs::write(&real, "[daemon]\ncheck_interval_ms = 2000\n").unwrap();
+    let link = AppConfig::default_config_path();
+    fs::create_dir_all(link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+
+    let (mut cfg, _) = AppConfig::load_or_create().unwrap();
+    assert_eq!(cfg.daemon.check_interval_ms, 2000);
+    cfg.daemon.check_interval_ms = 2468;
+    cfg.save().unwrap();
+
+    assert!(fs::symlink_metadata(&link)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert!(fs::read_to_string(&real)
+        .unwrap()
+        .contains("check_interval_ms = 2468"));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_zero_interval_is_clamped() {
+    let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = isolated_config_home("zero");
+    let path = AppConfig::default_config_path();
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "[daemon]\ncheck_interval_ms = 0\n").unwrap();
+    let (cfg, _) = AppConfig::load_or_create().unwrap();
+    assert_eq!(cfg.daemon.check_interval_ms, MIN_CHECK_INTERVAL_MS);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_parse_error_names_file() {
+    let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = isolated_config_home("badparse");
+    let path = AppConfig::default_config_path();
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "invalid = toml [").unwrap();
+    let err = AppConfig::load_or_create().expect_err("broken file must fail");
+    assert!(err.to_string().contains("config.toml"), "{err}");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "invalid = toml [");
+    let _ = fs::remove_dir_all(&dir);
+}

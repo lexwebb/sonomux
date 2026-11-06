@@ -106,7 +106,12 @@ async fn main() -> anyhow::Result<()> {
     );
     info!("Sonomux daemon initialized and watching audio graph.");
 
-    let mut ticker = tokio::time::interval(Duration::from_millis(config.daemon.check_interval_ms));
+    let mut ticker = tokio::time::interval(Duration::from_millis(
+        config
+            .daemon
+            .check_interval_ms
+            .max(sonomux_core::config::MIN_CHECK_INTERVAL_MS),
+    ));
     let mut fader_ticker = tokio::time::interval(Duration::from_millis(50));
 
     #[cfg(unix)]
