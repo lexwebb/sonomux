@@ -69,7 +69,10 @@ impl PulseManager {
 
         for line in stdout.lines() {
             let parts: Vec<&str> = line.split('\t').collect();
-            if parts.len() >= 3 && parts[1] == "module-loopback" && parts[2].contains(&src_needle) {
+            if parts.len() >= 3
+                && parts[1] == "module-loopback"
+                && parts[2].split_whitespace().any(|t| t == src_needle)
+            {
                 if let Ok(id) = parts[0].parse::<u32>() {
                     return Some(id);
                 }

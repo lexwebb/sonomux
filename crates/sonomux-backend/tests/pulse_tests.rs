@@ -96,6 +96,24 @@ fn test_parse_loopback_module_id() {
 }
 
 #[test]
+fn test_parse_loopback_module_id_exact_source() {
+    let input = "10\tmodule-loopback\tsource=mix_src.monitor sink=a\n\
+                 11\tmodule-loopback\tsource=mix_src_extra sink=b\n\
+                 12\tmodule-loopback\tsink=c source=mix_src latency_msec=20\n\
+                 13\tmodule-null-sink\tsource=mix_src\n";
+
+    assert_eq!(
+        PulseManager::parse_loopback_module_id(input, "mix_src"),
+        Some(12)
+    );
+    assert_eq!(
+        PulseManager::parse_loopback_module_id(input, "mix_src.monitor"),
+        Some(10)
+    );
+    assert_eq!(PulseManager::parse_loopback_module_id(input, "mix"), None);
+}
+
+#[test]
 fn test_is_stream_on_source_healthy() {
     let source_outputs = json!([
         {
