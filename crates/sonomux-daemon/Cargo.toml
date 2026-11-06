@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lib]
+name = "sonomux_daemon"
+path = "src/lib.rs"
+
 [[bin]]
 name = "sonomuxd"
 path = "src/main.rs"
