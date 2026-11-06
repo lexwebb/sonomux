@@ -244,7 +244,7 @@ async fn main() -> anyhow::Result<()> {
                     }
 
                     // Enforce intelligent stream classification & routing policies
-                    if current_cfg.routing.enabled {
+                    if routing_should_run(goxlr_up, current_cfg.routing.enabled) {
                         if let Err(e) = Backend::enforce_stream_routing(
                             &current_cfg.routing,
                             &current_cfg.devices,
@@ -252,6 +252,8 @@ async fn main() -> anyhow::Result<()> {
                         ).await {
                             debug!("Stream routing enforcement error: {}", e);
                         }
+                    } else {
+                        Backend::stop_stream_routing().await;
                     }
 
                     // Evaluate rules on maintenance tick
@@ -269,6 +271,7 @@ async fn main() -> anyhow::Result<()> {
                         warn!("GoXLR disconnected or suspended.");
                     }
                     goxlr_was_up = false;
+                    Backend::stop_stream_routing().await;
                 }
             }
 
@@ -302,6 +305,12 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Sonomux daemon exited cleanly.");
     Ok(())
+}
+
+/// Per-app routing runs only while it is enabled and the GoXLR is up; otherwise every route
+/// must be released, or tapped apps stay muted on a channel nobody hears.
+fn routing_should_run(goxlr_up: bool, routing_enabled: bool) -> bool {
+    goxlr_up && routing_enabled
 }
 
 async fn evaluate_and_dispatch(
@@ -399,5 +408,18 @@ async fn serve_unix_socket(svc: SonomuxDbusService) {
                 Err(e) => warn!("IPC connection setup error: {}", e),
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::routing_should_run;
+
+    #[test]
+    fn routing_runs_only_when_enabled_and_goxlr_up() {
+        assert!(routing_should_run(true, true));
+        assert!(!routing_should_run(true, false));
+        assert!(!routing_should_run(false, true));
+        assert!(!routing_should_run(false, false));
     }
 }

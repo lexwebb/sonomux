@@ -426,4 +426,13 @@ impl CoreAudioManager {
     ) -> Result<usize, BackendError> {
         Ok(crate::coreaudio_routing::sync(routing_config, devices))
     }
+
+    /// Release every routed app back to its normal output. Returns how many routes were dropped.
+    pub async fn stop_stream_routing() -> usize {
+        let n = crate::coreaudio_routing::clear();
+        if n > 0 {
+            tracing::info!("Routing stopped: released {} route(s)", n);
+        }
+        n
+    }
 }

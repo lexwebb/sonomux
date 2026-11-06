@@ -116,13 +116,23 @@ pub fn sync(routing: &RoutingConfig, devices: &DevicesConfig) -> usize {
     live.values().map(|(p, ..)| p.len()).sum()
 }
 
-/// Drop every route, restoring all apps' normal output.
-pub fn clear() {
-    routes().lock().unwrap().clear();
+/// Drop every route, restoring all apps' normal output. Returns how many routes there were.
+pub fn clear() -> usize {
+    let mut live = routes().lock().unwrap();
+    let n = live.len();
+    live.clear();
+    n
 }
 
 #[cfg(test)]
 mod tests {
+    use super::clear;
+
+    #[test]
+    fn clear_with_no_routes_is_a_no_op() {
+        assert_eq!(clear(), 0);
+    }
+
     #[test]
     fn app_of_exe_uses_outermost_app() {
         use crate::coreaudio::app_of_exe;

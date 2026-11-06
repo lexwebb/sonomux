@@ -552,6 +552,12 @@ impl PulseManager {
         Ok(())
     }
 
+    /// Linux routing moves streams once; there is nothing live to release. Streams stay where
+    /// they are, as before.
+    pub async fn stop_stream_routing() -> usize {
+        0
+    }
+
     /// Enforce all stream classification & routing policies.
     pub async fn enforce_stream_routing(
         routing_config: &RoutingConfig,

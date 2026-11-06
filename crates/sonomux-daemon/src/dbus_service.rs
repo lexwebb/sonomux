@@ -225,6 +225,10 @@ impl SonomuxDbusService {
             self.tokio_handle.spawn(async move {
                 let _ = sonomux_backend::Backend::enforce_stream_routing(&r, &d, &p).await;
             });
+        } else {
+            self.tokio_handle.spawn(async move {
+                sonomux_backend::Backend::stop_stream_routing().await;
+            });
         }
         Ok(())
     }
