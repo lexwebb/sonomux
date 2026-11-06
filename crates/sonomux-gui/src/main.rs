@@ -122,11 +122,11 @@ pub fn try_focus_existing_instance() -> bool {
 
 /// Channels an app or category can be sent to. Linux also has the surround stage.
 fn channel_choices() -> Vec<&'static str> {
-    let mut v = vec!["System", "Game", "Chat", "Music", "Sample"];
-    if !cfg!(target_os = "macos") {
-        v.push("Surround");
-    }
-    v
+    sonomux_core::ChannelTarget::ALL
+        .into_iter()
+        .filter(|c| !(cfg!(target_os = "macos") && *c == sonomux_core::ChannelTarget::Surround))
+        .map(|c| c.as_str())
+        .collect()
 }
 
 /// Routing categories shown under "Category defaults": (config key, label).

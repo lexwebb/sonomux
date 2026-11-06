@@ -1,3 +1,5 @@
+use crate::channel::ChannelTarget;
+use crate::config::RoutingConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -59,6 +61,53 @@ impl StreamInfo {
 /// Curated database and heuristics engine for classifying desktop audio streams.
 pub struct AppClassifier;
 
+/// The override value for a stream. Keys match the binary or app name exactly, or a bundle-ID
+/// prefix on a dot boundary ("com.spotify.client" covers "com.spotify.client.helper").
+pub fn override_for<'a>(
+    stream: &StreamInfo,
+    overrides: &'a HashMap<String, String>,
+) -> Option<&'a str> {
+    let app_name_clean = stream.app_name.trim();
+    let binary_clean = stream.binary.trim();
+    let by_prefix = || {
+        overrides.iter().find_map(|(k, v)| {
+            let rest = app_name_clean.strip_prefix(k.as_str())?;
+            rest.starts_with('.').then_some(v)
+        })
+    };
+    overrides
+        .get(binary_clean)
+        .or_else(|| overrides.get(app_name_clean))
+        .or_else(by_prefix)
+        .map(String::as_str)
+}
+
+/// Config key of a category in `category_targets`.
+pub fn category_key(c: AppCategory) -> &'static str {
+    match c {
+        AppCategory::Game => "game",
+        AppCategory::Chat => "chat",
+        AppCategory::Music => "music",
+        AppCategory::Browser => "browser",
+        AppCategory::Production => "production",
+        AppCategory::Soundboard => "soundboard",
+        AppCategory::System => "system",
+    }
+}
+
+/// Where a stream should play: an override naming a channel wins; otherwise the stream's
+/// category's target from `category_targets`.
+pub fn channel_for(stream: &StreamInfo, routing: &RoutingConfig) -> ChannelTarget {
+    if let Some(c) = override_for(stream, &routing.app_overrides).and_then(ChannelTarget::parse) {
+        return c;
+    }
+    let key = category_key(AppClassifier::classify(stream, &routing.app_overrides));
+    routing
+        .category_targets
+        .get(key)
+        .map_or(ChannelTarget::System, |s| ChannelTarget::parse_or_system(s))
+}
+
 impl AppClassifier {
     /// Classify a stream using the full multi-tier heuristics pipeline:
     /// 1. User overrides (exact binary or application name)
@@ -72,19 +121,7 @@ impl AppClassifier {
         let binary_clean = stream.binary.trim();
 
         // 1. Explicit user override from config.toml
-        // Keys match the binary or app name exactly, or a bundle-ID prefix on a dot boundary
-        // ("com.spotify.client" covers "com.spotify.client.helper").
-        let by_prefix = || {
-            overrides.iter().find_map(|(k, v)| {
-                let rest = app_name_clean.strip_prefix(k.as_str())?;
-                rest.starts_with('.').then_some(v)
-            })
-        };
-        if let Some(target) = overrides
-            .get(binary_clean)
-            .or_else(|| overrides.get(app_name_clean))
-            .or_else(by_prefix)
-        {
+        if let Some(target) = override_for(stream, overrides) {
             if let Some(cat) = Self::parse_category_name(target) {
                 return cat;
             }

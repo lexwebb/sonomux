@@ -224,9 +224,11 @@ impl Default for PoliciesConfig {
 pub struct RoutingConfig {
     /// Master toggle for automatic stream classification and routing.
     pub enabled: bool,
-    /// Destination channel per category ("Game", "Chat", "Music", "System", "Sample", or "Surround").
+    /// Destination channel per category: a `ChannelTarget` name ("System", "Game", "Chat",
+    /// "Music", "Sample" or "Surround"). Unknown names fall back to System with a warning.
     pub category_targets: HashMap<String, String>,
-    /// Exact binary or application name overrides mapped to a target channel name.
+    /// Exact binary or application name overrides. A value may be a channel name (routes there
+    /// directly) or a category name (routes to that category's target).
     pub app_overrides: HashMap<String, String>,
 }
 

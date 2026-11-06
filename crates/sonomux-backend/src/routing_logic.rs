@@ -1,7 +1,8 @@
 //! Pure routing decisions for per-app routes: which processes go where, and whether a live
 //! route is still good. No CoreAudio calls, so this compiles and is tested on every platform.
 
-use sonomux_core::{AppCategory, AppClassifier, DevicesConfig, RoutingConfig, StreamInfo};
+use sonomux_core::classification::channel_for;
+use sonomux_core::{ChannelTarget, DevicesConfig, RoutingConfig, StreamInfo};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -12,33 +13,14 @@ pub type RouteKey = (String, String, usize);
 /// or a replug gets a new ID and the old tap goes silent, so a changed ID means rebuild.
 pub type DeviceIds = (Option<u32>, Option<u32>);
 
-/// Target device name for a category, from the routing rules. macOS has no surround stage, so
-/// "Surround" means the Game channel.
-pub fn target_sink(
-    category: AppCategory,
-    routing: &RoutingConfig,
-    devices: &DevicesConfig,
-) -> String {
-    let key = match category {
-        AppCategory::Game => "game",
-        AppCategory::Chat => "chat",
-        AppCategory::Music => "music",
-        AppCategory::Browser => "browser",
-        AppCategory::Production => "production",
-        AppCategory::Soundboard => "soundboard",
-        AppCategory::System => "system",
-    };
-    let channel = routing
-        .category_targets
-        .get(key)
-        .map(String::as_str)
-        .unwrap_or("System");
+/// Sink for a channel on macOS: no surround stage, so Surround plays on Game.
+pub fn target_sink(channel: ChannelTarget, devices: &DevicesConfig) -> String {
     match channel {
-        "Game" | "Surround" => &devices.goxlr_game_sink,
-        "Chat" => &devices.goxlr_chat_sink,
-        "Music" => &devices.goxlr_music_sink,
-        "Sample" | "Soundboard" => &devices.goxlr_sample_sink,
-        _ => &devices.goxlr_system_sink,
+        ChannelTarget::Game | ChannelTarget::Surround => &devices.goxlr_game_sink,
+        ChannelTarget::Chat => &devices.goxlr_chat_sink,
+        ChannelTarget::Music => &devices.goxlr_music_sink,
+        ChannelTarget::Sample => &devices.goxlr_sample_sink,
+        ChannelTarget::System => &devices.goxlr_system_sink,
     }
     .clone()
 }
@@ -63,8 +45,7 @@ pub fn plan(
         if s.pid.is_none_or(|p| p == own_pid) {
             continue;
         }
-        let category = AppClassifier::classify(s, &routing.app_overrides);
-        let target = target_sink(category, routing, devices);
+        let target = target_sink(channel_for(s, routing), devices);
         if target == default_output {
             continue;
         }
@@ -281,6 +262,33 @@ mod tests {
         assert_eq!(p.len(), 2);
         assert_eq!(p[&("HW".into(), "HW".into(), 4)], [10, 11]);
         assert_eq!(p[&("HW".into(), "HW".into(), 6)], [12]);
+    }
+
+    #[test]
+    fn target_sink_maps_every_channel() {
+        let d = devs();
+        let got: Vec<String> = ChannelTarget::ALL
+            .iter()
+            .map(|c| target_sink(*c, &d))
+            .collect();
+        assert_eq!(got, ["Sys", "Game", "Chat", "Music", "Sample", "Game"]);
+    }
+
+    #[test]
+    fn override_naming_a_channel_routes_there_directly() {
+        let mut routing = RoutingConfig::default();
+        routing.app_overrides.insert("Zen".into(), "Music".into());
+        routing
+            .app_overrides
+            .insert("Slack".into(), "Surround".into());
+        let streams = [
+            stream(10, 100, "Zen", "app.zen-browser.zen"),
+            stream(11, 101, "Slack", "com.tinyspeck.slackmacgap"),
+        ];
+        let p = run(&streams, &routing);
+        // Surround on macOS is the Game sink, which the test resolver does not know: skipped.
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[&("HW".into(), "HW".into(), 6)], [10]);
     }
 
     #[test]
