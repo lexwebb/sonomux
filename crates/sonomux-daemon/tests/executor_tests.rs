@@ -132,6 +132,104 @@ async fn restore_hardware_volume_falls_back_to_default() {
 }
 
 #[tokio::test]
+async fn save_uses_named_channel_and_slot() {
+    let mut h = Harness::new("saveslot").await;
+    h.run(Action::SaveHardwareVolume {
+        device_id: s("goxlr"),
+        channel: s("Game"),
+        slot: s("game_before"),
+    })
+    .await;
+    let saved = std::fs::read_to_string(h.state_dir.join("saved-volume-game_before")).unwrap();
+    assert_eq!(saved.trim(), "150");
+}
+
+#[tokio::test]
+async fn restore_uses_named_slot_and_channel() {
+    let mut h = Harness::new("restoreslot").await;
+    std::fs::write(h.state_dir.join("saved-volume-game_before"), "90").unwrap();
+    h.run(Action::RestoreHardwareVolume {
+        device_id: s("goxlr"),
+        channel: s("Game"),
+        slot: s("game_before"),
+        default_level: 1.0,
+    })
+    .await;
+    let reqs = h.requests_with("SetVolume");
+    assert_eq!(reqs.len(), 1);
+    assert!(
+        reqs[0].contains(r#""SetVolume":["Game",90]"#),
+        "{}",
+        reqs[0]
+    );
+}
+
+#[tokio::test]
+async fn speaker_volume_slot_reads_legacy_file() {
+    let mut h = Harness::new("legacyslot").await;
+    std::fs::write(h.state_dir.join("saved-speaker-volume"), "77").unwrap();
+    h.run(Action::RestoreHardwareVolume {
+        device_id: s("goxlr"),
+        channel: s("Headphones"),
+        slot: s("speaker_volume"),
+        default_level: 1.0,
+    })
+    .await;
+    let reqs = h.requests_with("SetVolume");
+    assert_eq!(reqs.len(), 1);
+    assert!(
+        reqs[0].contains(r#""SetVolume":["Headphones",77]"#),
+        "{}",
+        reqs[0]
+    );
+}
+
+#[tokio::test]
+async fn slots_do_not_overwrite_each_other() {
+    let mut h = Harness::new("slotsmulti").await;
+    h.run(Action::SaveHardwareVolume {
+        device_id: s("goxlr"),
+        channel: s("Headphones"),
+        slot: s("a"),
+    })
+    .await;
+    h.run(Action::SaveHardwareVolume {
+        device_id: s("goxlr"),
+        channel: s("Game"),
+        slot: s("b"),
+    })
+    .await;
+    let a = std::fs::read_to_string(h.state_dir.join("saved-volume-a")).unwrap();
+    let b = std::fs::read_to_string(h.state_dir.join("saved-volume-b")).unwrap();
+    assert_eq!((a.trim(), b.trim()), ("200", "150"));
+}
+
+#[tokio::test]
+async fn unsafe_slot_name_stays_in_state_dir() {
+    let mut h = Harness::new("unsafeslot").await;
+    h.run(Action::SaveHardwareVolume {
+        device_id: s("goxlr"),
+        channel: s("Headphones"),
+        slot: s("../escape"),
+    })
+    .await;
+    assert!(h.state_dir.join("saved-volume-___escape").exists());
+    assert!(!h.state_dir.parent().unwrap().join("escape").exists());
+}
+
+#[tokio::test]
+async fn unknown_channel_is_not_saved() {
+    let mut h = Harness::new("unknownchan").await;
+    h.run(Action::SaveHardwareVolume {
+        device_id: s("goxlr"),
+        channel: s("NoSuchChannel"),
+        slot: s("x"),
+    })
+    .await;
+    assert!(!h.state_dir.join("saved-volume-x").exists());
+}
+
+#[tokio::test]
 async fn set_hardware_mute_sends_zero_volume() {
     let mut h = Harness::new("mute").await;
     h.run(Action::SetHardwareMute {

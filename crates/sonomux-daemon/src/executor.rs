@@ -81,16 +81,23 @@ impl<'a> ActionExecutor<'a> {
             Action::SaveHardwareVolume {
                 device_id,
                 channel,
-                slot: _,
+                slot,
             } => {
                 info!(
-                    "Executing SaveHardwareVolume: device={} channel={}",
-                    device_id, channel
+                    "Executing SaveHardwareVolume: device={} channel={} slot={}",
+                    device_id, channel, slot
                 );
                 if device_id == "goxlr" {
-                    if let Ok(vol) = self.goxlr.get_headphones_volume().await {
-                        if vol > 0 {
-                            self.state_store.save_speaker_volume(vol);
+                    if let Ok(v) = HasHardwareVolume::get_channel_volume(self.goxlr, channel).await
+                    {
+                        let raw = (v * 255.0).round() as u8;
+                        if raw > 0 {
+                            self.state_store.save_volume(slot, raw);
+                        } else {
+                            debug!(
+                                "Not saving {} volume: it is 0 (muted or unknown channel)",
+                                channel
+                            );
                         }
                     }
                 }
@@ -99,19 +106,22 @@ impl<'a> ActionExecutor<'a> {
             Action::RestoreHardwareVolume {
                 device_id,
                 channel,
-                slot: _,
+                slot,
                 default_level,
             } => {
                 info!(
-                    "Executing RestoreHardwareVolume: device={} channel={}",
-                    device_id, channel
+                    "Executing RestoreHardwareVolume: device={} channel={} slot={}",
+                    device_id, channel, slot
                 );
                 if device_id == "goxlr" {
                     let restore_raw = self
                         .state_store
-                        .load_speaker_volume()
+                        .load_volume(slot)
                         .unwrap_or((default_level.clamp(0.0, 1.0) * 255.0).round() as u8);
-                    info!("Restoring GoXLR {} volume to raw {}", channel, restore_raw);
+                    info!(
+                        "Restoring GoXLR {} volume to raw {} (slot {})",
+                        channel, restore_raw, slot
+                    );
                     let mut client = self.goxlr.clone();
                     let norm = (restore_raw as f32) / 255.0;
                     if let Err(e) = client.set_channel_volume(channel, norm).await {
