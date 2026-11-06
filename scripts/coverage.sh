@@ -7,7 +7,7 @@ cd "${ROOT_DIR}"
 
 COVERAGE_DIR="target/coverage"
 # Ratchet: raise this whenever coverage rises; never lower it.
-TARGET_BOUNDARY="58.0"
+TARGET_BOUNDARY="61.0"
 STRICT_MODE=false
 
 if [[ "${1:-}" == "--strict" || "${CI:-}" == "true" ]]; then
