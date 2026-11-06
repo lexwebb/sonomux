@@ -112,7 +112,9 @@ async fn main() -> anyhow::Result<()> {
             .check_interval_ms
             .max(sonomux_core::config::MIN_CHECK_INTERVAL_MS),
     ));
-    let mut fader_ticker = tokio::time::interval(Duration::from_millis(50));
+    let mut fader_ticker = tokio::time::interval(Duration::from_millis(100));
+    // After a slow reply (GoXLR Utility busy or timing out), don't fire the missed polls back to back.
+    fader_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     #[cfg(unix)]
     let mut sigterm =

@@ -300,3 +300,61 @@ fn fader_channels_are_sorted_a_to_d() {
     let m: sonomux_device_goxlr::MixerData = serde_json::from_str(json).unwrap();
     assert_eq!(m.fader_channels(), ["Mic", "Chat", "Music", "System"]);
 }
+
+#[tokio::test]
+async fn test_get_all_volumes_is_one_request_after_first() {
+    let socket_path =
+        std::env::temp_dir().join(format!("mock-goxlr-count-{}.socket", std::process::id()));
+    let _ = std::fs::remove_file(&socket_path);
+    let listener = UnixListener::bind(&socket_path).expect("Failed to bind mock socket");
+    let received = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&received);
+
+    let server_task = tokio::spawn(async move {
+        loop {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let cnt = Arc::clone(&counter);
+                tokio::spawn(async move {
+                    let mut len_buf = [0u8; 4];
+                    if stream.read_exact(&mut len_buf).await.is_err() {
+                        return;
+                    }
+                    let mut req_buf = vec![0u8; u32::from_be_bytes(len_buf) as usize];
+                    if stream.read_exact(&mut req_buf).await.is_err() {
+                        return;
+                    }
+                    cnt.fetch_add(1, Ordering::SeqCst);
+                    let resp = json!({
+                        "Status": {
+                            "mixers": {
+                                "MOCK_SERIAL_123": {
+                                    "levels": { "volumes": { "Headphones": 200, "Game": 150 } },
+                                    "router": {},
+                                    "fader_status": {}
+                                }
+                            }
+                        }
+                    });
+                    let bytes = serde_json::to_vec(&resp).unwrap();
+                    let _ = stream.write_all(&(bytes.len() as u32).to_be_bytes()).await;
+                    let _ = stream.write_all(&bytes).await;
+                    let _ = stream.flush().await;
+                });
+            }
+        }
+    });
+
+    let client = GoXLRClient::new(&socket_path);
+    client.get_all_volumes().await.expect("first poll");
+    let baseline = received.load(Ordering::SeqCst);
+    let mut last = Default::default();
+    for _ in 0..5 {
+        last = client.get_all_volumes().await.expect("poll");
+    }
+    assert_eq!(received.load(Ordering::SeqCst) - baseline, 5);
+    let vols: std::collections::HashMap<String, u8> = last;
+    assert_eq!(vols.get("Headphones"), Some(&200));
+
+    server_task.abort();
+    let _ = std::fs::remove_file(&socket_path);
+}
