@@ -7,6 +7,9 @@
 use crate::BackendError;
 use sonomux_core::{DevicesConfig, PoliciesConfig, RoutingConfig, StreamInfo};
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 #[repr(C)]
 struct Address {
@@ -208,6 +211,57 @@ impl Device {
     }
 }
 
+/// How long a device or process list read stays fresh. Well under one daemon tick.
+// ponytail: time-based memo with explicit invalidation when we change devices ourselves;
+// switch to a CoreAudio property listener if outside changes must show up faster than this.
+const LIST_TTL: Duration = Duration::from_millis(250);
+
+/// A short-lived copy of one HAL query.
+struct Memo<T> {
+    at: Option<Instant>,
+    value: T,
+}
+
+impl<T: Default> Default for Memo<T> {
+    fn default() -> Self {
+        Self {
+            at: None,
+            value: T::default(),
+        }
+    }
+}
+
+impl<T: Clone> Memo<T> {
+    /// The cached value if it is younger than `ttl` at `now`, else a fresh `read()`.
+    fn get(&mut self, now: Instant, ttl: Duration, read: impl FnOnce() -> T) -> T {
+        if self
+            .at
+            .is_none_or(|t| now.saturating_duration_since(t) >= ttl)
+        {
+            self.value = read();
+            self.at = Some(now);
+        }
+        self.value.clone()
+    }
+
+    fn invalidate(&mut self) {
+        self.at = None;
+    }
+}
+
+fn device_memo() -> &'static Mutex<Memo<Vec<Device>>> {
+    static M: OnceLock<Mutex<Memo<Vec<Device>>>> = OnceLock::new();
+    M.get_or_init(Default::default)
+}
+
+fn stream_memo() -> &'static Mutex<Memo<Vec<StreamInfo>>> {
+    static M: OnceLock<Mutex<Memo<Vec<StreamInfo>>>> = OnceLock::new();
+    M.get_or_init(Default::default)
+}
+
+/// Real device-list reads from the HAL since start, for measuring how often we enumerate.
+static DEVICE_READS: AtomicU64 = AtomicU64::new(0);
+
 #[derive(Debug, Clone, Default)]
 pub struct CoreAudioManager;
 
@@ -217,6 +271,31 @@ impl CoreAudioManager {
     }
 
     pub fn devices() -> Vec<Device> {
+        let mut memo = device_memo().lock().unwrap_or_else(|e| e.into_inner());
+        memo.get(Instant::now(), LIST_TTL, || {
+            DEVICE_READS.fetch_add(1, Ordering::Relaxed);
+            Self::read_devices()
+        })
+    }
+
+    /// How many times the device list was really read from the HAL (memo misses).
+    pub fn device_reads() -> u64 {
+        DEVICE_READS.load(Ordering::Relaxed)
+    }
+
+    /// Forget the cached device and process lists. Call after creating or destroying a device.
+    pub fn invalidate_lists() {
+        device_memo()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .invalidate();
+        stream_memo()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .invalidate();
+    }
+
+    fn read_devices() -> Vec<Device> {
         get_vec::<u32>(SYSTEM_OBJECT, HW_DEVICES, SCOPE_GLOBAL)
             .unwrap_or_default()
             .into_iter()
@@ -304,7 +383,13 @@ impl CoreAudioManager {
     /// Every process with an audio client, playing or not (`is_corked` = not playing now).
     /// `index` is the HAL process object ID; `app_name` the bundle ID; `binary` the name of
     /// the app the process belongs to (its outermost `.app`), so helpers group with their app.
+    // Lock order: stream memo, then (via `devices()`) device memo. Never the reverse.
     pub fn all_streams() -> Vec<StreamInfo> {
+        let mut memo = stream_memo().lock().unwrap_or_else(|e| e.into_inner());
+        memo.get(Instant::now(), LIST_TTL, Self::read_streams)
+    }
+
+    fn read_streams() -> Vec<StreamInfo> {
         let devices = Self::devices();
         get_vec::<u32>(SYSTEM_OBJECT, HW_PROCESSES, SCOPE_GLOBAL)
             .unwrap_or_default()
@@ -424,6 +509,94 @@ impl CoreAudioManager {
         devices: &DevicesConfig,
         _policies: &PoliciesConfig,
     ) -> Result<usize, BackendError> {
-        Ok(crate::coreaudio_routing::sync(routing_config, devices))
+        // Blocking HAL calls: keep them off the async worker threads.
+        let (r, d) = (routing_config.clone(), devices.clone());
+        tokio::task::spawn_blocking(move || crate::coreaudio_routing::sync(&r, &d))
+            .await
+            .map_err(|e| BackendError::Routing(format!("routing task failed: {}", e)))
+    }
+
+    /// Release every routed app back to its normal output. Returns how many routes were dropped.
+    pub async fn stop_stream_routing() -> usize {
+        // Dropping routes makes HAL calls: keep them off the async worker threads.
+        let n = tokio::task::spawn_blocking(crate::coreaudio_routing::clear)
+            .await
+            .unwrap_or(0);
+        if n > 0 {
+            tracing::info!("Routing stopped: released {} route(s)", n);
+        }
+        n
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn routing_with_routing_disabled_creates_no_routes() {
+        // Disabled routing plans nothing, so this only reads the device lists (no taps).
+        let cfg = sonomux_core::AppConfig::default();
+        let mut routing = cfg.routing.clone();
+        routing.enabled = false;
+        let n = CoreAudioManager::enforce_stream_routing(&routing, &cfg.devices, &cfg.policies)
+            .await
+            .unwrap();
+        assert_eq!(n, 0);
+        assert_eq!(CoreAudioManager::stop_stream_routing().await, 0);
+    }
+
+    #[test]
+    fn memo_reads_once_within_ttl_and_again_after() {
+        let mut m: Memo<u32> = Memo::default();
+        let mut reads = 0;
+        let t0 = Instant::now();
+        let ttl = Duration::from_millis(250);
+        assert_eq!(
+            m.get(t0, ttl, || {
+                reads += 1;
+                7
+            }),
+            7
+        );
+        assert_eq!(
+            m.get(t0 + Duration::from_millis(100), ttl, || {
+                reads += 1;
+                8
+            }),
+            7
+        );
+        assert_eq!(reads, 1);
+        assert_eq!(
+            m.get(t0 + ttl, ttl, || {
+                reads += 1;
+                9
+            }),
+            9
+        );
+        assert_eq!(reads, 2);
+        m.invalidate();
+        assert_eq!(
+            m.get(t0 + ttl, ttl, || {
+                reads += 1;
+                10
+            }),
+            10
+        );
+        assert_eq!(reads, 3);
+    }
+
+    #[test]
+    fn a_ticks_worth_of_lookups_reads_the_device_list_at_most_once() {
+        CoreAudioManager::invalidate_lists();
+        let _ = CoreAudioManager::devices(); // warm
+        let before = CoreAudioManager::device_reads();
+        for _ in 0..12 {
+            let _ = CoreAudioManager::devices();
+        }
+        let _ = CoreAudioManager::all_streams();
+        let _ = CoreAudioManager::all_streams();
+        // Other tests in this binary may invalidate concurrently, so allow one extra read.
+        assert!(CoreAudioManager::device_reads() - before <= 2);
     }
 }

@@ -22,6 +22,9 @@ pub struct SonomuxDbusService {
     pub goxlr: sonomux_device_goxlr::GoXLRClient,
     pub config: Arc<Mutex<sonomux_core::AppConfig>>,
     pub tokio_handle: tokio::runtime::Handle,
+    /// Asks the main loop for a routing pass with the latest config. Handlers never route
+    /// themselves, so passes never overlap or run on a stale config.
+    pub routing_kick: Arc<tokio::sync::Notify>,
 }
 
 #[interface(name = "org.sonomux.Daemon")]
@@ -132,22 +135,17 @@ impl SonomuxDbusService {
                     .await
                     .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
 
-                let mut s = state.lock().await;
-                if curr > 0 {
-                    goxlr
-                        .set_volume_raw(sonomux_device_goxlr::Channel::Headphones, 0)
-                        .await
-                        .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
-                    s.speaker_volume = 0.0;
-                    Ok(true)
+                let (raw, pct, muted) = if curr > 0 {
+                    (0, 0.0, true)
                 } else {
-                    goxlr
-                        .set_volume_raw(sonomux_device_goxlr::Channel::Headphones, 255)
-                        .await
-                        .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
-                    s.speaker_volume = 100.0;
-                    Ok(false)
-                }
+                    (255, 100.0, false)
+                };
+                goxlr
+                    .set_volume_raw(sonomux_device_goxlr::Channel::Headphones, raw)
+                    .await
+                    .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
+                state.lock().await.speaker_volume = pct;
+                Ok(muted)
             })
             .await
             .map_err(|e| zbus::fdo::Error::Failed(format!("Task execution error: {}", e)))?
@@ -174,20 +172,11 @@ impl SonomuxDbusService {
                     &keep_off,
                 )
                 .await;
-
-                if config.routing.enabled {
-                    sonomux_backend::Backend::enforce_stream_routing(
-                        &config.routing,
-                        &config.devices,
-                        &config.policies,
-                    )
-                    .await
-                    .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
-                }
-                Ok(())
             })
             .await
-            .map_err(|e| zbus::fdo::Error::Failed(format!("Task execution error: {}", e)))?
+            .map_err(|e| zbus::fdo::Error::Failed(format!("Task execution error: {}", e)))?;
+        self.routing_kick.notify_one();
+        Ok(())
     }
 
     /// Return live detected streams: (index, app_name, binary, category, current_sink)
@@ -217,15 +206,9 @@ impl SonomuxDbusService {
     async fn set_routing_enabled(&self, enabled: bool) -> zbus::fdo::Result<()> {
         let mut cfg = self.config.lock().await;
         cfg.routing.enabled = enabled;
-        let _ = cfg.save();
-        if enabled {
-            let r = cfg.routing.clone();
-            let d = cfg.devices.clone();
-            let p = cfg.policies.clone();
-            self.tokio_handle.spawn(async move {
-                let _ = sonomux_backend::Backend::enforce_stream_routing(&r, &d, &p).await;
-            });
-        }
+        cfg.save()
+            .map_err(|e| zbus::fdo::Error::Failed(format!("Could not save config: {}", e)))?;
+        self.routing_kick.notify_one();
         Ok(())
     }
 
@@ -235,15 +218,9 @@ impl SonomuxDbusService {
         cfg.routing
             .category_targets
             .insert(category.to_lowercase(), target);
-        let _ = cfg.save();
-        if cfg.routing.enabled {
-            let r = cfg.routing.clone();
-            let d = cfg.devices.clone();
-            let p = cfg.policies.clone();
-            self.tokio_handle.spawn(async move {
-                let _ = sonomux_backend::Backend::enforce_stream_routing(&r, &d, &p).await;
-            });
-        }
+        cfg.save()
+            .map_err(|e| zbus::fdo::Error::Failed(format!("Could not save config: {}", e)))?;
+        self.routing_kick.notify_one();
         Ok(())
     }
 
@@ -280,15 +257,9 @@ impl SonomuxDbusService {
         } else {
             cfg.routing.app_overrides.insert(id, target);
         }
-        let _ = cfg.save();
-        let (r, d, p) = (
-            cfg.routing.clone(),
-            cfg.devices.clone(),
-            cfg.policies.clone(),
-        );
-        self.tokio_handle.spawn(async move {
-            let _ = sonomux_backend::Backend::enforce_stream_routing(&r, &d, &p).await;
-        });
+        cfg.save()
+            .map_err(|e| zbus::fdo::Error::Failed(format!("Could not save config: {}", e)))?;
+        self.routing_kick.notify_one();
         Ok(())
     }
 
@@ -358,7 +329,8 @@ impl SonomuxDbusService {
         };
         if slot.is_some() {
             *slot = Some(name);
-            let _ = cfg.save();
+            cfg.save()
+                .map_err(|e| zbus::fdo::Error::Failed(format!("Could not save config: {}", e)))?;
         }
         Ok(())
     }
@@ -374,7 +346,8 @@ impl SonomuxDbusService {
             cfg.devices.default_output = None;
             cfg.devices.default_input = None;
         }
-        let _ = cfg.save();
+        cfg.save()
+            .map_err(|e| zbus::fdo::Error::Failed(format!("Could not save config: {}", e)))?;
         Ok(())
     }
 
@@ -382,7 +355,8 @@ impl SonomuxDbusService {
     async fn set_split_unpaired(&self, enabled: bool) -> zbus::fdo::Result<()> {
         let mut cfg = self.config.lock().await;
         cfg.devices.split_unpaired_inputs = enabled;
-        let _ = cfg.save();
+        cfg.save()
+            .map_err(|e| zbus::fdo::Error::Failed(format!("Could not save config: {}", e)))?;
         Ok(())
     }
 
@@ -434,7 +408,8 @@ impl SonomuxDbusService {
         let mut cfg = self.config.lock().await;
         if let Some(r) = cfg.rules.iter_mut().find(|r| r.name == rule_name) {
             r.enabled = enabled;
-            let _ = cfg.save();
+            cfg.save()
+                .map_err(|e| zbus::fdo::Error::Failed(format!("Could not save config: {}", e)))?;
         }
         Ok(())
     }

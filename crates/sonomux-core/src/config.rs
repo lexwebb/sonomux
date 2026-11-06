@@ -7,12 +7,57 @@ use tracing::{info, warn};
 
 use std::collections::HashMap;
 
+/// Smallest allowed `daemon.check_interval_ms`.
+pub const MIN_CHECK_INTERVAL_MS: u64 = 100;
+
+/// Write `contents` to `path` without ever leaving a half-written file: write a temp file in
+/// the same directory, flush it to disk, then rename it over the target. A symlinked config
+/// stays a symlink: the file it points to is replaced.
+fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let is_symlink = fs::symlink_metadata(path)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false);
+    let target = if is_symlink {
+        fs::canonicalize(path)?
+    } else {
+        path.to_path_buf()
+    };
+    let name = target.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "config path has no file name",
+        )
+    })?;
+    let tmp = target.with_file_name(format!(".{}.tmp", name.to_string_lossy()));
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    let result = (|| {
+        let mut f = opts.open(&tmp)?;
+        f.write_all(contents.as_bytes())?;
+        f.sync_all()?;
+        fs::rename(&tmp, &target)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
+}
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("I/O error reading or writing config: {0}")]
     Io(#[from] std::io::Error),
     #[error("Failed to parse TOML configuration: {0}")]
     Parse(#[from] toml::de::Error),
+    #[error("Failed to parse TOML configuration in {path}: {source}")]
+    ParseFile {
+        path: String,
+        #[source]
+        source: toml::de::Error,
+    },
     #[error("Failed to serialize TOML configuration: {0}")]
     Serialize(#[from] toml::ser::Error),
 }
@@ -179,9 +224,11 @@ impl Default for PoliciesConfig {
 pub struct RoutingConfig {
     /// Master toggle for automatic stream classification and routing.
     pub enabled: bool,
-    /// Destination channel per category ("Game", "Chat", "Music", "System", "Sample", or "Surround").
+    /// Destination channel per category: a `ChannelTarget` name ("System", "Game", "Chat",
+    /// "Music", "Sample" or "Surround"). Unknown names fall back to System with a warning.
     pub category_targets: HashMap<String, String>,
-    /// Exact binary or application name overrides mapped to a target channel name.
+    /// Exact binary or application name overrides. A value may be a channel name (routes there
+    /// directly) or a category name (routes to that category's target).
     pub app_overrides: HashMap<String, String>,
 }
 
@@ -221,22 +268,42 @@ impl AppConfig {
         base.join("sonomux").join("config.toml")
     }
 
+    /// Clamp values that would crash the daemon (a zero interval panics `tokio::time::interval`).
+    fn normalized(mut self) -> Self {
+        if self.daemon.check_interval_ms < MIN_CHECK_INTERVAL_MS {
+            warn!(
+                "check_interval_ms = {} is too small; using {} ms",
+                self.daemon.check_interval_ms, MIN_CHECK_INTERVAL_MS
+            );
+            self.daemon.check_interval_ms = MIN_CHECK_INTERVAL_MS;
+        }
+        self
+    }
+
     /// Load config from file, or automatically create default template if missing (hands-free installation).
     pub fn load_or_create() -> Result<(Self, PathBuf), ConfigError> {
         let user_path = Self::default_config_path();
 
         if user_path.exists() {
             let content = fs::read_to_string(&user_path)?;
-            let config: AppConfig = toml::from_str(&content)?;
-            return Ok((config, user_path));
+            let config: AppConfig =
+                toml::from_str(&content).map_err(|e| ConfigError::ParseFile {
+                    path: user_path.display().to_string(),
+                    source: e,
+                })?;
+            return Ok((config.normalized(), user_path));
         }
 
         // Check system-wide fallback (/etc/sonomux/config.toml)
         let sys_path = Path::new("/etc/sonomux/config.toml");
         if sys_path.exists() {
             let content = fs::read_to_string(sys_path)?;
-            let config: AppConfig = toml::from_str(&content)?;
-            return Ok((config, sys_path.to_path_buf()));
+            let config: AppConfig =
+                toml::from_str(&content).map_err(|e| ConfigError::ParseFile {
+                    path: sys_path.display().to_string(),
+                    source: e,
+                })?;
+            return Ok((config.normalized(), sys_path.to_path_buf()));
         }
 
         // First run: generate default config file
@@ -252,7 +319,7 @@ impl AppConfig {
                       # ====================================================================\n\n";
         let full_content = format!("{}{}", header, toml_string);
 
-        if let Err(e) = fs::write(&user_path, full_content) {
+        if let Err(e) = write_atomic(&user_path, &full_content) {
             warn!(
                 "Could not save default config to {}: {}",
                 user_path.display(),
@@ -276,7 +343,7 @@ impl AppConfig {
                       # Sonomux Audio Coordinator Configuration\n\
                       # ====================================================================\n\n";
         let full_content = format!("{}{}", header, toml_string);
-        fs::write(&path, full_content)?;
+        write_atomic(&path, &full_content)?;
         Ok(())
     }
 }

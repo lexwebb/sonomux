@@ -1,3 +1,4 @@
+pub mod channel;
 pub mod classification;
 pub mod config;
 pub mod ipc;
@@ -5,6 +6,7 @@ pub mod rules;
 pub mod status;
 pub mod traits;
 
+pub use channel::ChannelTarget;
 pub use classification::{group_apps, AppCategory, AppClassifier, AppEntry, StreamInfo};
 pub use config::{AppConfig, DaemonConfig, DevicesConfig, PoliciesConfig, RoutingConfig};
 pub use rules::{Action, Rule, RuleContext, RuleEngine, Trigger};

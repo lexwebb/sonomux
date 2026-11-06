@@ -6,44 +6,12 @@ slint::include_modules!();
 mod hardware;
 
 use slint::{ModelRc, SharedString, StandardListViewItem, VecModel};
+use sonomux_core::ipc::SonomuxDaemonProxy;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::Notify;
 use tracing::info;
-use zbus::proxy;
-
-#[proxy(
-    interface = "org.sonomux.Daemon",
-    default_service = "org.sonomux.Daemon",
-    default_path = "/org/sonomux/Daemon"
-)]
-trait SonomuxDaemon {
-    async fn get_status(&self) -> zbus::Result<(bool, String, bool, u8, f64, bool)>;
-    async fn get_channel_volumes(&self) -> zbus::Result<HashMap<String, f64>>;
-    async fn set_channel_volume(&self, channel: String, volume_pct: f64) -> zbus::Result<()>;
-    async fn toggle_speaker_mute(&self) -> zbus::Result<bool>;
-    async fn get_channel_mutes(&self) -> zbus::Result<HashMap<String, bool>>;
-    async fn set_channel_muted(&self, channel: String, muted: bool) -> zbus::Result<()>;
-    async fn get_routing_config(&self) -> zbus::Result<(bool, HashMap<String, String>)>;
-    async fn set_routing_enabled(&self, enabled: bool) -> zbus::Result<()>;
-    async fn set_category_target(&self, category: String, target: String) -> zbus::Result<()>;
-    #[allow(clippy::type_complexity)] // tuple mirrors the daemon's D-Bus signature
-    async fn get_apps(&self) -> zbus::Result<Vec<(String, String, String, String, bool)>>;
-    async fn set_app_override(&self, id: String, target: String) -> zbus::Result<()>;
-    #[allow(clippy::type_complexity)]
-    async fn get_audio_devices(&self) -> zbus::Result<(Vec<String>, Vec<String>, String, String)>;
-    async fn get_device_settings(&self) -> zbus::Result<(bool, bool)>;
-    async fn set_default_device(&self, name: String, input: bool) -> zbus::Result<()>;
-    async fn set_keep_defaults(&self, keep: bool) -> zbus::Result<()>;
-    async fn set_split_unpaired(&self, enabled: bool) -> zbus::Result<()>;
-    #[allow(clippy::type_complexity)]
-    async fn get_split_devices(
-        &self,
-    ) -> zbus::Result<(Vec<(String, String, String, String)>, Vec<(String, String)>)>;
-    async fn get_rules(&self) -> zbus::Result<Vec<(String, bool)>>;
-    async fn set_rule_enabled(&self, rule_name: String, enabled: bool) -> zbus::Result<()>;
-}
 
 /// Searches Hyprland's clients JSON for an existing Sonomux window address.
 pub fn find_existing_hyprland_address(clients_json: &str) -> Option<String> {
@@ -154,11 +122,11 @@ pub fn try_focus_existing_instance() -> bool {
 
 /// Channels an app or category can be sent to. Linux also has the surround stage.
 fn channel_choices() -> Vec<&'static str> {
-    let mut v = vec!["System", "Game", "Chat", "Music", "Sample"];
-    if !cfg!(target_os = "macos") {
-        v.push("Surround");
-    }
-    v
+    sonomux_core::ChannelTarget::ALL
+        .into_iter()
+        .filter(|c| !(cfg!(target_os = "macos") && *c == sonomux_core::ChannelTarget::Surround))
+        .map(|c| c.as_str())
+        .collect()
 }
 
 /// Routing categories shown under "Category defaults": (config key, label).
@@ -217,7 +185,7 @@ type InstallNotes = Arc<Mutex<HashMap<usize, String>>>;
 
 fn helper_rows(notes: &InstallNotes) -> Vec<(i32, String, String, String)> {
     let notes = notes.lock().unwrap();
-    hardware::detect()
+    hardware::detect_cached()
         .into_iter()
         .map(|(i, installed)| {
             let h = &hardware::HELPERS[i];
@@ -788,7 +756,9 @@ async fn main() -> anyhow::Result<()> {
             let (notes, refresh) = (Arc::clone(&notes), Arc::clone(&refresh));
             tokio::task::spawn_blocking(move || {
                 let mut n = notes.lock().unwrap();
-                match hardware::install(h) {
+                let result = hardware::install(h);
+                hardware::invalidate_detect();
+                match result {
                     // The system installer or terminal takes it from here; the row turns to
                     // "installed" once the helper appears.
                     Ok(()) => n.insert(

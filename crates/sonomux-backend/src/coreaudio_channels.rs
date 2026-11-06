@@ -30,8 +30,10 @@ use objc2_core_audio::{
 };
 use objc2_core_foundation::CFDictionary;
 use objc2_foundation::{NSArray, NSString};
+use std::collections::HashSet;
 use std::ptr::NonNull;
-use tracing::{info, warn};
+use std::sync::{Mutex, OnceLock};
+use tracing::{debug, info, warn};
 
 const UID_PREFIX: &str = "org.sonomux.split::";
 const ELEMENT_NAME: u32 = u32::from_be_bytes(*b"lchn");
@@ -168,6 +170,7 @@ fn channel_names(id: u32, scope: u32) -> Vec<String> {
 pub fn ensure_split_devices(include_unpaired_inputs: bool) -> Vec<String> {
     let devices = CoreAudioManager::devices();
     let mut created = Vec::new();
+    let mut changed = false;
     for hw in &devices {
         let transport = get::<u32>(hw.id, TRANSPORT, SCOPE_GLOBAL).unwrap_or(0);
         if transport == TRANSPORT_AGGREGATE || transport == TRANSPORT_VIRTUAL {
@@ -186,6 +189,7 @@ pub fn ensure_split_devices(include_unpaired_inputs: bool) -> Vec<String> {
             let ours = d.uid.starts_with(UID_PREFIX) && d.uid.ends_with(&format!("::{}", hw.uid));
             if ours && !planned.iter().any(|s| s.uid == d.uid) {
                 let st = unsafe { AudioHardwareDestroyAggregateDevice(d.id) };
+                changed = true;
                 info!(
                     "Removed stale CoreAudio device '{}' (status {})",
                     d.name, st
@@ -197,7 +201,11 @@ pub fn ensure_split_devices(include_unpaired_inputs: bool) -> Vec<String> {
             if devices.iter().any(|d| d.uid == split.uid) {
                 continue;
             }
-            match create(&hw.uid, &split) {
+            let result = create(&hw.uid, &split);
+            // Even a failed create may have briefly made (then removed) a device.
+            changed = true;
+            let loud = first_failure(&mut warned().lock().unwrap(), &split.uid, result.is_ok());
+            match result {
                 Ok(()) => {
                     info!(
                         "Created CoreAudio device '{}' (out {:?}, in {:?})",
@@ -205,9 +213,18 @@ pub fn ensure_split_devices(include_unpaired_inputs: bool) -> Vec<String> {
                     );
                     created.push(split.name);
                 }
-                Err(e) => warn!("Could not create '{}': {}", split.name, e),
+                Err(e) if loud => {
+                    warn!(
+                        "Could not create '{}': {} (will keep retrying)",
+                        split.name, e
+                    )
+                }
+                Err(e) => debug!("Could not create '{}': {}", split.name, e),
             }
         }
+    }
+    if changed {
+        CoreAudioManager::invalidate_lists();
     }
     created
 }
@@ -258,6 +275,24 @@ pub fn resolve_output(device_id: u32) -> Option<(String, u32)> {
     Some((main, first))
 }
 
+/// UIDs whose creation failed and was already reported, so a device that keeps failing is
+/// logged once, not every tick.
+fn warned() -> &'static Mutex<HashSet<String>> {
+    static WARNED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    WARNED.get_or_init(Default::default)
+}
+
+/// Record the outcome of creating `uid`. Returns true when a failure should be logged at
+/// warn level (the first failure since the last success).
+fn first_failure(seen: &mut HashSet<String>, uid: &str, ok: bool) -> bool {
+    if ok {
+        seen.remove(uid);
+        false
+    } else {
+        seen.insert(uid.to_string())
+    }
+}
+
 fn create(hw_uid: &str, split: &Split) -> Result<(), BackendError> {
     let hw = NSString::from_str(hw_uid);
     let name = NSString::from_str(&split.name);
@@ -277,10 +312,15 @@ fn create(hw_uid: &str, split: &Split) -> Result<(), BackendError> {
     )?;
     for (first, scope) in [(split.output, SCOPE_OUTPUT), (split.input, SCOPE_INPUT)] {
         if let Some(f) = first {
-            check(
+            if let Err(e) = check(
                 set(id, DEV_PREFERRED_STEREO, scope, &[f, f + 1]),
                 "set preferred stereo pair",
-            )?;
+            ) {
+                // Half-made: it would sit on the default pair forever, because later ticks skip
+                // existing UIDs. Remove it so the next tick tries again.
+                unsafe { AudioHardwareDestroyAggregateDevice(id) };
+                return Err(e);
+            }
         }
     }
     Ok(())
@@ -289,6 +329,16 @@ fn create(hw_uid: &str, split: &Split) -> Result<(), BackendError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn warns_once_per_failing_device_until_it_succeeds() {
+        let mut seen = HashSet::new();
+        assert!(first_failure(&mut seen, "a", false));
+        assert!(!first_failure(&mut seen, "a", false));
+        assert!(first_failure(&mut seen, "b", false));
+        assert!(!first_failure(&mut seen, "a", true));
+        assert!(first_failure(&mut seen, "a", false));
+    }
 
     fn names(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()

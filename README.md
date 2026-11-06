@@ -7,7 +7,7 @@ Designed for modern Linux desktops (PipeWire / WirePlumber) and architected for 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Built with Rust](https://img.shields.io/badge/Language-Rust-orange.svg)](https://www.rust-lang.org/)
 [![GUI: Slint](https://img.shields.io/badge/GUI-Slint-green.svg)](https://slint.dev/)
-[![Coverage: 90%](https://img.shields.io/badge/Coverage-90%25-brightgreen.svg)](scripts/coverage.sh)
+[![Coverage: 63%](https://img.shields.io/badge/Coverage-63%25-brightgreen.svg)](scripts/coverage.sh)
 
 > [!NOTE]
 > **Project Transparency & AI Collaboration**: Sonomux is developed using human-AI pair programming. Every architectural decision, code change, and hardware integration is reviewed, tested on physical equipment, and maintained by human engineers. We welcome both human and AI-assisted community contributions, provided contributors take 100% personal responsibility for reviewing, understanding, and testing their code. See our [Contributing Guidelines](CONTRIBUTING.md) for full details.
@@ -67,7 +67,6 @@ Devices implement modular capability traits rather than monolithic drivers:
 - `HasPresenceDetection`: For wireless peripherals requiring HID / battery probing to determine true physical presence.
 - `HasRoutingMatrix`: For devices with internal hardware routing (GoXLR, Rodecaster, BEACN).
 - `HasHardwareVolume`: For devices with discrete hardware DAC / headphone volume registers.
-- `HasFaders`: For devices with motorized or physical faders and mute buttons.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for full trait specifications and [docs/DEVICE_CONTRIBUTING.md](docs/DEVICE_CONTRIBUTING.md) for how to add support for new devices.
 
@@ -77,52 +76,53 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for full trait specifications a
 
 Sonomux features a built-in declarative rule engine configured via TOML (`config.toml`), allowing users to automate routing changes, speaker mutes, volume levels, and loopbacks based on hardware state transitions without writing code:
 
+This mirrors the built-in default rule; the full schema lives in `crates/sonomux-core/src/rules.rs`.
+
 ```toml
-[general]
-poll_interval_ms = 1000
-log_level = "info"
+[daemon]
+check_interval_ms = 1500
 
-[headset]
-device_name = "Arctis Nova 7"
-debounce_ms = 1500
-mic_source_name = "alsa_input.usb-SteelSeries_Arctis_Nova_7-00.mono-fallback"
-sink_name = "alsa_output.usb-SteelSeries_Arctis_Nova_7-00.analog-stereo"
-
-[goxlr]
-socket_path = "/tmp/goxlr.socket"
-speakers_channel = "Headphones"
-feed_source_name = "alsa_output.usb-TC-Helicon_GoXLRMini-00.analog-chat.monitor"
+[devices]
+headset_sink = "alsa_output.usb-SteelSeries_Arctis_Nova_7-00.analog-stereo"
+goxlr_mix_source = "alsa_input.usb-TC-Helicon_GoXLRMini-00.HiFi__Line5__source"
 
 [[rules]]
 name = "Auto Headset Switcher"
-description = "Mute desk speakers and route GoXLR submix to wireless headset when powered on"
 enabled = true
-debounce_ms = 1500
 
 [rules.trigger]
 type = "device_status"
-device = "headset"
+device_id = "headset"
 status = "Active"
 
 [[rules.actions_on_enter]]
-type = "create_loopback"
-source = "alsa_output.usb-TC-Helicon_GoXLRMini-00.analog-chat.monitor"
-sink = "alsa_output.usb-SteelSeries_Arctis_Nova_7-00.analog-stereo"
+type = "save_hardware_volume"
+device_id = "goxlr"
+channel = "Headphones"
+slot = "speaker_volume"
 
 [[rules.actions_on_enter]]
-type = "set_volume"
+type = "set_hardware_volume"
+device_id = "goxlr"
 channel = "Headphones"
-volume = 0
-slot = "speakers"
+level = 0.0
+
+[[rules.actions_on_enter]]
+type = "ensure_loopback"
+source = "alsa_input.usb-TC-Helicon_GoXLRMini-00.HiFi__Line5__source"
+sink = "alsa_output.usb-SteelSeries_Arctis_Nova_7-00.analog-stereo"
+latency_ms = 20
 
 [[rules.actions_on_exit]]
 type = "destroy_loopback"
+source = "alsa_input.usb-TC-Helicon_GoXLRMini-00.HiFi__Line5__source"
 
 [[rules.actions_on_exit]]
-type = "restore_volume"
+type = "restore_hardware_volume"
+device_id = "goxlr"
 channel = "Headphones"
-slot = "speakers"
-fallback = 204
+slot = "speaker_volume"
+default_level = 1.0
 ```
 
 ---
@@ -137,15 +137,15 @@ fallback = 204
 - [x] **Phase 2: Slint Native GUI & Omarchy Integration**
   - [x] Native Slint GUI dashboard (`sonomux-gui`) with real-time volume faders, mute controls, battery indicators, and live daemon status badge.
   - [x] Session D-Bus service (`org.sonomux.Daemon`) and CLI controller (`sonomuxctl`).
-  - [x] Omarchy status bar widget with dynamic icons, tooltip telemetry, left-click mute toggle, and right-click GUI launcher.
+  - [x] Omarchy status bar widget with dynamic icons, tooltip telemetry, left-click GUI launcher, and right-click mute toggle.
   - [x] Hands-free installer (`install.sh`), systemd user service (`sonomuxd.service`), XDG desktop launcher, and Arch packaging (`PKGBUILD`).
 - [x] **Phase 3: Declarative Rule Engine**
   - [x] TOML-based declarative configuration schema (`config.toml`).
   - [x] Composable triggers: device presence, battery level thresholds, audio node presence, and boolean logic.
   - [x] Action executor: loopback creation/destruction, volume ramping, mute toggles, and state restoration on exit.
-  - [x] Robust test suite maintaining $\ge 85\%$ test coverage with automated CI enforcement and coverage badges.
+  - [x] Test suite with a coverage ratchet (the gate only ever goes up) enforced in CI, plus coverage badges.
 - [ ] **Phase 4: macOS CoreAudio Support & Hardware Ecosystem**
-  - [ ] Implement `audio-backend-coreaudio` aggregate device and multi-output routing layer.
+  - [x] CoreAudio backend: per-channel split devices, per-app routing via process taps, default-device management, and a menu bar extra.
   - [ ] Additional community device drivers (Elgato Wave XLR, Rodecaster Pro, BEACN, Focusrite).
   - [ ] Visual audio graph routing canvas within Slint GUI.
 

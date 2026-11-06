@@ -1,16 +1,12 @@
-mod dbus_service;
-mod executor;
-mod state;
-
-use dbus_service::{SharedDaemonState, SonomuxDbusService};
-use executor::ActionExecutor;
 use sonomux_backend::Backend;
-use sonomux_core::rules::{RuleContext, RuleEngine};
+use sonomux_core::rules::{Rule, RuleContext, RuleEngine};
 use sonomux_core::traits::{AudioDevice, DeviceEvent, DeviceStatus};
 use sonomux_core::AppConfig;
+use sonomux_daemon::dbus_service::{SharedDaemonState, SonomuxDbusService};
+use sonomux_daemon::executor::ActionExecutor;
+use sonomux_daemon::state::StateStore;
 use sonomux_device_goxlr::GoXLRClient;
 use sonomux_device_headset::HeadsetMonitor;
-use state::StateStore;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -57,6 +53,7 @@ async fn main() -> anyhow::Result<()> {
     }));
 
     let config_shared = Arc::new(Mutex::new(config.clone()));
+    let routing_kick = Arc::new(tokio::sync::Notify::new());
 
     // Start D-Bus session service if enabled
     if config.daemon.dbus_enabled {
@@ -65,6 +62,7 @@ async fn main() -> anyhow::Result<()> {
             goxlr: goxlr.clone(),
             config: Arc::clone(&config_shared),
             tokio_handle: tokio::runtime::Handle::current(),
+            routing_kick: Arc::clone(&routing_kick),
         };
 
         #[cfg(target_os = "macos")]
@@ -102,7 +100,9 @@ async fn main() -> anyhow::Result<()> {
 
     let mut goxlr_was_up = false;
     let mut current_loopback_id: Option<u32> = None;
-    let mut rule_engine = RuleEngine::new(config.rules.clone());
+    let (startup_rules, changed_rules) = effective_rules(&config.rules);
+    log_trimmed_rules(&changed_rules);
+    let mut rule_engine = RuleEngine::new(startup_rules);
 
     info!(
         "Rule engine loaded {} declarative rule(s).",
@@ -110,8 +110,15 @@ async fn main() -> anyhow::Result<()> {
     );
     info!("Sonomux daemon initialized and watching audio graph.");
 
-    let mut ticker = tokio::time::interval(Duration::from_millis(config.daemon.check_interval_ms));
-    let mut fader_ticker = tokio::time::interval(Duration::from_millis(50));
+    let mut ticker = tokio::time::interval(Duration::from_millis(
+        config
+            .daemon
+            .check_interval_ms
+            .max(sonomux_core::config::MIN_CHECK_INTERVAL_MS),
+    ));
+    let mut fader_ticker = tokio::time::interval(Duration::from_millis(100));
+    // After a slow reply (GoXLR Utility busy or timing out), don't fire the missed polls back to back.
+    fader_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     #[cfg(unix)]
     let mut sigterm =
@@ -131,10 +138,11 @@ async fn main() -> anyhow::Result<()> {
                         }
 
                         // Evaluate rules against updated context
+                        let live_cfg = config_shared.lock().await.clone();
                         evaluate_and_dispatch(
                             &headset,
                             &goxlr,
-                            &config,
+                            &live_cfg,
                             &shared_state,
                             &state_store,
                             &mut rule_engine,
@@ -148,10 +156,11 @@ async fn main() -> anyhow::Result<()> {
                             s.battery_pct = percentage;
                         }
 
+                        let live_cfg = config_shared.lock().await.clone();
                         evaluate_and_dispatch(
                             &headset,
                             &goxlr,
-                            &config,
+                            &live_cfg,
                             &shared_state,
                             &state_store,
                             &mut rule_engine,
@@ -244,15 +253,7 @@ async fn main() -> anyhow::Result<()> {
                     }
 
                     // Enforce intelligent stream classification & routing policies
-                    if current_cfg.routing.enabled {
-                        if let Err(e) = Backend::enforce_stream_routing(
-                            &current_cfg.routing,
-                            &current_cfg.devices,
-                            &current_cfg.policies,
-                        ).await {
-                            debug!("Stream routing enforcement error: {}", e);
-                        }
-                    }
+                    routing_pass(&current_cfg, true).await;
 
                     // Evaluate rules on maintenance tick
                     evaluate_and_dispatch(
@@ -269,7 +270,14 @@ async fn main() -> anyhow::Result<()> {
                         warn!("GoXLR disconnected or suspended.");
                     }
                     goxlr_was_up = false;
+                    routing_pass(&current_cfg, false).await;
                 }
+            }
+
+            // 2b. Routing requested over IPC (override, category, toggle): run it now with the latest config
+            _ = routing_kick.notified() => {
+                let cfg = config_shared.lock().await.clone();
+                routing_pass(&cfg, goxlr_was_up).await;
             }
 
             // 3. Graceful shutdown on Ctrl+C or SIGTERM
@@ -304,6 +312,46 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Per-app routing runs only while it is enabled and the GoXLR is up; otherwise every route
+/// must be released, or tapped apps stay muted on a channel nobody hears.
+fn routing_should_run(goxlr_up: bool, routing_enabled: bool) -> bool {
+    goxlr_up && routing_enabled
+}
+
+/// The only place routing runs: apply the rules when routing should run, otherwise release
+/// every route. Called from the main loop only, so passes never overlap.
+async fn routing_pass(cfg: &AppConfig, goxlr_up: bool) {
+    if routing_should_run(goxlr_up, cfg.routing.enabled) {
+        if let Err(e) =
+            Backend::enforce_stream_routing(&cfg.routing, &cfg.devices, &cfg.policies).await
+        {
+            debug!("Stream routing enforcement error: {}", e);
+        }
+    } else {
+        Backend::stop_stream_routing().await;
+    }
+}
+
+/// The rules the engine should run on this OS. macOS can't loopback audio to the headset yet,
+/// so rules that rely on one keep only their other actions.
+// ponytail: remove the macOS branch (and without_loopback_actions) when macOS loopback ships; plan 014.
+fn effective_rules(rules: &[Rule]) -> (Vec<Rule>, Vec<String>) {
+    #[cfg(target_os = "macos")]
+    {
+        sonomux_core::rules::without_loopback_actions(rules.to_vec())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        (rules.to_vec(), Vec::new())
+    }
+}
+
+fn log_trimmed_rules(names: &[String]) {
+    for name in names {
+        info!("Rule '{}': skipping its speaker mute and loopback on macOS (headset loopback isn't supported yet)", name);
+    }
+}
+
 async fn evaluate_and_dispatch(
     headset: &HeadsetMonitor,
     goxlr: &GoXLRClient,
@@ -313,6 +361,25 @@ async fn evaluate_and_dispatch(
     rule_engine: &mut RuleEngine,
     current_loopback_id: &mut Option<u32>,
 ) {
+    // Pick up rule edits (e.g. the GUI's rule switches). Disabled or removed rules that were
+    // active exit here, so their exit actions (like restoring the speakers) still run.
+    // Compare filtered against filtered, or a trimmed engine would differ from the raw config
+    // on every tick.
+    let (wanted, changed) = effective_rules(&config.rules);
+    if rule_engine.rules() != wanted.as_slice() {
+        log_trimmed_rules(&changed);
+        let exits = rule_engine.set_rules(wanted);
+        if !exits.is_empty() {
+            let mut executor = ActionExecutor {
+                goxlr,
+                state_store,
+                shared_state,
+                current_loopback_id: &mut *current_loopback_id,
+            };
+            executor.execute_actions(&exits).await;
+        }
+    }
+
     let headset_status = headset.status().await;
     let goxlr_status = goxlr.status().await;
     let battery = {
@@ -399,5 +466,44 @@ async fn serve_unix_socket(svc: SonomuxDbusService) {
                 Err(e) => warn!("IPC connection setup error: {}", e),
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{routing_pass, routing_should_run};
+
+    #[test]
+    fn routing_runs_only_when_enabled_and_goxlr_up() {
+        assert!(routing_should_run(true, true));
+        assert!(!routing_should_run(true, false));
+        assert!(!routing_should_run(false, true));
+        assert!(!routing_should_run(false, false));
+    }
+
+    #[tokio::test]
+    async fn routing_pass_with_routing_disabled_only_releases() {
+        // Disabled routing (or GoXLR down) takes the release path: no taps are created.
+        let mut cfg = sonomux_core::AppConfig::default();
+        cfg.routing.enabled = false;
+        routing_pass(&cfg, true).await;
+        routing_pass(&cfg, false).await;
+    }
+
+    #[tokio::test]
+    async fn routing_kicks_are_kept_and_coalesced() {
+        let kick = std::sync::Arc::new(tokio::sync::Notify::new());
+        kick.notify_one();
+        kick.notify_one();
+        // The stored permit wakes one waiter immediately...
+        tokio::time::timeout(std::time::Duration::from_millis(100), kick.notified())
+            .await
+            .expect("kick sent before waiting must not be lost");
+        // ...and the two kicks merged: nothing left.
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), kick.notified())
+                .await
+                .is_err()
+        );
     }
 }

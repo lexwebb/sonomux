@@ -187,6 +187,7 @@ impl AppRoute {
             unsafe { AudioDeviceStart(aggregate, proc_id) },
             "AudioDeviceStart",
         )?;
+        crate::coreaudio::CoreAudioManager::invalidate_lists();
         Ok(route)
     }
 
@@ -210,6 +211,7 @@ impl Drop for AppRoute {
             // The IOProc is stopped and destroyed, so nothing else holds the state.
             drop(Box::from_raw(self.state));
         }
+        crate::coreaudio::CoreAudioManager::invalidate_lists();
     }
 }
 
@@ -300,26 +302,14 @@ unsafe extern "C-unwind" fn io_proc(
             continue;
         }
         let out = std::slice::from_raw_parts_mut(buf.mData as *mut f32, frames * ch);
-        // We only own our pair; everything else in this client's output stays silent.
-        out.fill(0.0);
-        for side in 0..2 {
-            let target = st.first_channel + side;
-            if target < channel_base || target >= channel_base + ch {
-                continue;
-            }
-            let col = target - channel_base;
-            for f in 0..frames.min(tap_frames) {
-                let row = &tap_data[f * tap_ch..(f + 1) * tap_ch];
-                // Mono tap: same sample both sides. Otherwise sum this side of every pair.
-                let v: f32 = if tap_ch == 1 {
-                    row[0]
-                } else {
-                    row.iter().skip(side).step_by(2).sum()
-                };
-                out[f * ch + col] = v;
-                peak = peak.max(v.abs());
-            }
-        }
+        peak = peak.max(crate::routing_logic::mix_pair(
+            out,
+            ch,
+            channel_base,
+            st.first_channel,
+            tap_data,
+            tap_ch,
+        ));
         channel_base += ch;
     }
 

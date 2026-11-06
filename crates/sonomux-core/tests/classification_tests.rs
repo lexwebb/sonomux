@@ -356,3 +356,91 @@ fn group_apps_merges_helpers_under_one_bundle_id() {
     );
     assert_eq!(apps[0].category, AppCategory::Chat);
 }
+
+fn routing_with(
+    overrides: &[(&str, &str)],
+    targets: &[(&str, &str)],
+) -> sonomux_core::RoutingConfig {
+    let mut r = sonomux_core::RoutingConfig::default();
+    r.app_overrides = overrides
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    for (k, v) in targets {
+        r.category_targets.insert(k.to_string(), v.to_string());
+    }
+    r
+}
+
+fn named_stream(name: &str) -> StreamInfo {
+    let mut s = StreamInfo::default();
+    s.app_name = name.to_string();
+    s.binary = name.to_string();
+    s
+}
+
+#[test]
+fn test_channel_for_override_surround() {
+    let r = routing_with(&[("myapp", "Surround")], &[]);
+    assert_eq!(
+        channel_for(&named_stream("myapp"), &r),
+        sonomux_core::ChannelTarget::Surround
+    );
+}
+
+#[test]
+fn test_channel_for_override_game_beats_category_target() {
+    let r = routing_with(&[("myapp", "Game")], &[("game", "Surround")]);
+    assert_eq!(
+        channel_for(&named_stream("myapp"), &r),
+        sonomux_core::ChannelTarget::Game
+    );
+}
+
+#[test]
+fn test_channel_for_category_override_uses_category_target() {
+    let r = routing_with(&[("myapp", "Browser")], &[("browser", "Music")]);
+    assert_eq!(
+        channel_for(&named_stream("myapp"), &r),
+        sonomux_core::ChannelTarget::Music
+    );
+}
+
+#[test]
+fn test_channel_for_default_chat_category() {
+    let r = routing_with(&[], &[]);
+    let mut s = named_stream("unknown");
+    s.media_role = Some("communication".to_string());
+    assert_eq!(channel_for(&s, &r), sonomux_core::ChannelTarget::Chat);
+}
+
+#[test]
+fn test_channel_for_unknown_target_is_system() {
+    let r = routing_with(&[], &[("system", "Muisc")]);
+    assert_eq!(
+        channel_for(&named_stream("unknown"), &r),
+        sonomux_core::ChannelTarget::System
+    );
+}
+
+#[test]
+fn test_config_with_every_channel_string_parses() {
+    let toml_str = r#"
+[routing.category_targets]
+a = "System"
+b = "Game"
+c = "Chat"
+d = "Music"
+e = "Sample"
+f = "Surround"
+g = "Soundboard"
+"#;
+    let cfg: sonomux_core::AppConfig = toml::from_str(toml_str).expect("config parses");
+    let mut seen = Vec::new();
+    for k in ["a", "b", "c", "d", "e", "f", "g"] {
+        let v = &cfg.routing.category_targets[k];
+        seen.push(sonomux_core::ChannelTarget::parse(v).expect("known channel"));
+    }
+    assert_eq!(&seen[..6], &sonomux_core::ChannelTarget::ALL[..]);
+    assert_eq!(seen[6], sonomux_core::ChannelTarget::Sample);
+}

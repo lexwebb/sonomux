@@ -96,6 +96,24 @@ fn test_parse_loopback_module_id() {
 }
 
 #[test]
+fn test_parse_loopback_module_id_exact_source() {
+    let input = "10\tmodule-loopback\tsource=mix_src.monitor sink=a\n\
+                 11\tmodule-loopback\tsource=mix_src_extra sink=b\n\
+                 12\tmodule-loopback\tsink=c source=mix_src latency_msec=20\n\
+                 13\tmodule-null-sink\tsource=mix_src\n";
+
+    assert_eq!(
+        PulseManager::parse_loopback_module_id(input, "mix_src"),
+        Some(12)
+    );
+    assert_eq!(
+        PulseManager::parse_loopback_module_id(input, "mix_src.monitor"),
+        Some(10)
+    );
+    assert_eq!(PulseManager::parse_loopback_module_id(input, "mix"), None);
+}
+
+#[test]
 fn test_is_stream_on_source_healthy() {
     let source_outputs = json!([
         {
@@ -373,6 +391,36 @@ fn test_compute_routing_moves_fallback_when_surround_unavailable() {
 
     assert_eq!(moves.len(), 1);
     assert_eq!(moves[0].0, 42);
+    assert_eq!(moves[0].1, devices.goxlr_game_sink);
+}
+
+#[test]
+fn test_compute_routing_moves_surround_override() {
+    let mut routing_config = sonomux_core::RoutingConfig::default();
+    routing_config
+        .app_overrides
+        .insert("myapp".to_string(), "Surround".to_string());
+    let devices = sonomux_core::DevicesConfig::default();
+    let policies = sonomux_core::PoliciesConfig::default();
+
+    let mut stream = sonomux_core::StreamInfo::new(7, 10);
+    stream.app_name = "myapp".to_string();
+    stream.binary = "myapp".to_string();
+    stream.sink_name = devices.goxlr_system_sink.clone();
+
+    let moves = PulseManager::compute_routing_moves(
+        &[stream.clone()],
+        &routing_config,
+        &devices,
+        &policies,
+        true,
+    );
+    assert_eq!(moves.len(), 1);
+    assert_eq!(moves[0].1, policies.surround_in_node);
+
+    let moves =
+        PulseManager::compute_routing_moves(&[stream], &routing_config, &devices, &policies, false);
+    assert_eq!(moves.len(), 1);
     assert_eq!(moves[0].1, devices.goxlr_game_sink);
 }
 
