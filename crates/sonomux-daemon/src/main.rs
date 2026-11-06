@@ -471,7 +471,7 @@ async fn serve_unix_socket(svc: SonomuxDbusService) {
 
 #[cfg(test)]
 mod tests {
-    use super::routing_should_run;
+    use super::{routing_pass, routing_should_run};
 
     #[test]
     fn routing_runs_only_when_enabled_and_goxlr_up() {
@@ -479,6 +479,15 @@ mod tests {
         assert!(!routing_should_run(true, false));
         assert!(!routing_should_run(false, true));
         assert!(!routing_should_run(false, false));
+    }
+
+    #[tokio::test]
+    async fn routing_pass_with_routing_disabled_only_releases() {
+        // Disabled routing (or GoXLR down) takes the release path: no taps are created.
+        let mut cfg = sonomux_core::AppConfig::default();
+        cfg.routing.enabled = false;
+        routing_pass(&cfg, true).await;
+        routing_pass(&cfg, false).await;
     }
 
     #[tokio::test]

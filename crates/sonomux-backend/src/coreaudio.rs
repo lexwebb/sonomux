@@ -533,6 +533,19 @@ impl CoreAudioManager {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn routing_with_routing_disabled_creates_no_routes() {
+        // Disabled routing plans nothing, so this only reads the device lists (no taps).
+        let cfg = sonomux_core::AppConfig::default();
+        let mut routing = cfg.routing.clone();
+        routing.enabled = false;
+        let n = CoreAudioManager::enforce_stream_routing(&routing, &cfg.devices, &cfg.policies)
+            .await
+            .unwrap();
+        assert_eq!(n, 0);
+        assert_eq!(CoreAudioManager::stop_stream_routing().await, 0);
+    }
+
     #[test]
     fn memo_reads_once_within_ttl_and_again_after() {
         let mut m: Memo<u32> = Memo::default();
