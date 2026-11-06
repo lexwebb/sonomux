@@ -4,6 +4,8 @@
 use std::collections::HashSet;
 use std::path::Path;
 use std::process::Command;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 /// How Arch provides a helper.
 enum ArchPkg {
@@ -134,6 +136,36 @@ pub fn detect() -> Vec<(usize, bool)> {
         .collect()
 }
 
+/// How long a hardware scan stays fresh. Plugging a device in shows up within this time.
+const DETECT_TTL: Duration = Duration::from_secs(30);
+
+type DetectCache = Mutex<Option<(Instant, Vec<(usize, bool)>)>>;
+static CACHE: DetectCache = Mutex::new(None);
+
+fn is_fresh(scanned_at: Option<Instant>, now: Instant, ttl: Duration) -> bool {
+    scanned_at.is_some_and(|t| now.saturating_duration_since(t) < ttl)
+}
+
+/// `detect()`, re-run at most every DETECT_TTL (or after `invalidate_detect()`).
+pub fn detect_cached() -> Vec<(usize, bool)> {
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let now = Instant::now();
+    if let Some((_, rows)) = cache
+        .as_ref()
+        .filter(|(t, _)| is_fresh(Some(*t), now, DETECT_TTL))
+    {
+        return rows.clone();
+    }
+    let rows = detect();
+    *cache = Some((now, rows.clone()));
+    rows
+}
+
+/// Make the next `detect_cached()` scan again (e.g. after an install).
+pub fn invalidate_detect() {
+    *CACHE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
 fn open_url(url: &str) -> Result<(), String> {
     let opener = if cfg!(target_os = "macos") {
         "open"
@@ -253,6 +285,16 @@ fn download_mac_pkg(mp: &MacPkg) -> Result<std::path::PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_fresh_respects_ttl() {
+        let now = Instant::now();
+        let ttl = Duration::from_secs(30);
+        assert!(!is_fresh(None, now, ttl));
+        assert!(is_fresh(Some(now - Duration::from_secs(1)), now, ttl));
+        assert!(!is_fresh(Some(now - Duration::from_secs(31)), now, ttl));
+        assert!(!is_fresh(Some(now - ttl), now, ttl));
+    }
 
     #[test]
     fn parses_ioreg_vendor_ids() {
