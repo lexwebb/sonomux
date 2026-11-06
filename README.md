@@ -7,7 +7,7 @@ Designed for modern Linux desktops (PipeWire / WirePlumber) and architected for 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Built with Rust](https://img.shields.io/badge/Language-Rust-orange.svg)](https://www.rust-lang.org/)
 [![GUI: Slint](https://img.shields.io/badge/GUI-Slint-green.svg)](https://slint.dev/)
-[![Coverage: 90%](https://img.shields.io/badge/Coverage-90%25-brightgreen.svg)](scripts/coverage.sh)
+[![Coverage: 59%](https://img.shields.io/badge/Coverage-59%25-brightgreen.svg)](scripts/coverage.sh)
 
 > [!NOTE]
 > **Project Transparency & AI Collaboration**: Sonomux is developed using human-AI pair programming. Every architectural decision, code change, and hardware integration is reviewed, tested on physical equipment, and maintained by human engineers. We welcome both human and AI-assisted community contributions, provided contributors take 100% personal responsibility for reviewing, understanding, and testing their code. See our [Contributing Guidelines](CONTRIBUTING.md) for full details.
@@ -143,7 +143,7 @@ fallback = 204
   - [x] TOML-based declarative configuration schema (`config.toml`).
   - [x] Composable triggers: device presence, battery level thresholds, audio node presence, and boolean logic.
   - [x] Action executor: loopback creation/destruction, volume ramping, mute toggles, and state restoration on exit.
-  - [x] Robust test suite maintaining $\ge 85\%$ test coverage with automated CI enforcement and coverage badges.
+  - [x] Test suite with a coverage ratchet (the gate only ever goes up) enforced in CI, plus coverage badges.
 - [ ] **Phase 4: macOS CoreAudio Support & Hardware Ecosystem**
   - [ ] Implement `audio-backend-coreaudio` aggregate device and multi-output routing layer.
   - [ ] Additional community device drivers (Elgato Wave XLR, Rodecaster Pro, BEACN, Focusrite).

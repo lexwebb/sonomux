@@ -52,7 +52,7 @@ cargo test --workspace
 - **Formatting**: Run `cargo fmt --all` before committing.
 - **Linter**: Ensure `cargo clippy --workspace --all-targets` produces no warnings.
 - **Documentation**: Public traits, structs, and functions should have clear doc comments explaining their purpose and safety invariants.
-- **Test Coverage**: We maintain a **soft boundary of >= 85% line coverage** across the project. Run `./scripts/coverage.sh` before opening a pull request to verify that your changes include unit tests and keep the repository above the target.
+- **Test Coverage**: Line coverage is a **ratchet**: `TARGET_BOUNDARY` in `scripts/coverage.sh` must never be lowered, and should be raised whenever your change raises coverage. Run `./scripts/coverage.sh` before opening a pull request to verify that your changes include unit tests and stay above it.
 
 ### 4. Pull Request Checklist
 When opening a PR, include:

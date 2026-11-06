@@ -1,16 +1,12 @@
-mod dbus_service;
-mod executor;
-mod state;
-
-use dbus_service::{SharedDaemonState, SonomuxDbusService};
-use executor::ActionExecutor;
 use sonomux_backend::Backend;
 use sonomux_core::rules::{RuleContext, RuleEngine};
 use sonomux_core::traits::{AudioDevice, DeviceEvent, DeviceStatus};
 use sonomux_core::AppConfig;
+use sonomux_daemon::dbus_service::{SharedDaemonState, SonomuxDbusService};
+use sonomux_daemon::executor::ActionExecutor;
+use sonomux_daemon::state::StateStore;
 use sonomux_device_goxlr::GoXLRClient;
 use sonomux_device_headset::HeadsetMonitor;
-use state::StateStore;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
