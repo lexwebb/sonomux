@@ -3,6 +3,7 @@
 
 use sonomux_core::{AppCategory, AppClassifier, DevicesConfig, RoutingConfig, StreamInfo};
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 /// (source hardware UID, target hardware UID, target first channel 0-based).
 pub type RouteKey = (String, String, usize);
@@ -100,8 +101,45 @@ pub fn keep_route(
     frames_before: u64,
     frames_now: u64,
 ) -> bool {
-    let alive = !playing || frames_now > frames_before;
+    let alive = !route_dead(playing, frames_before, frames_now);
     desired.is_some_and(|d| d.as_slice() == procs) && built_on == ids_now && alive
+}
+
+/// A route whose apps play but whose tap has not counted a frame since the last tick.
+pub fn route_dead(playing: bool, frames_before: u64, frames_now: u64) -> bool {
+    playing && frames_now <= frames_before
+}
+
+/// Retry pacing for one route key that keeps failing (start errors, or dead right after start).
+/// Waits 1 s, 2 s, 4 s ... up to 60 s between attempts.
+#[derive(Debug, Clone, Default)]
+pub struct Backoff {
+    failures: u32,
+    until: Option<Instant>,
+}
+
+impl Backoff {
+    /// Longest wait between attempts.
+    pub const MAX: Duration = Duration::from_secs(60);
+
+    /// May we try this route again at `now`?
+    pub fn ready(&self, now: Instant) -> bool {
+        self.until.is_none_or(|u| now >= u)
+    }
+
+    /// Record a failure at `now`. Returns true only for the first failure in a row, so the
+    /// caller warns once and logs later failures at debug level.
+    pub fn fail(&mut self, now: Instant) -> bool {
+        self.failures = self.failures.saturating_add(1);
+        let wait = Duration::from_secs(1u64 << (self.failures - 1).min(6)).min(Self::MAX);
+        self.until = Some(now + wait);
+        self.failures == 1
+    }
+
+    /// How many failures in a row.
+    pub fn failures(&self) -> u32 {
+        self.failures
+    }
 }
 
 /// Fill one interleaved output buffer for the audio callback. Real-time safe: no allocation,
@@ -148,6 +186,50 @@ pub fn mix_pair(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_backoff_is_ready() {
+        assert!(Backoff::default().ready(Instant::now()));
+    }
+
+    #[test]
+    fn first_failure_warns_then_quiet() {
+        let t0 = Instant::now();
+        let mut b = Backoff::default();
+        assert!(b.fail(t0));
+        assert!(!b.fail(t0));
+        assert_eq!(b.failures(), 2);
+    }
+
+    #[test]
+    fn waits_double_each_time() {
+        let t0 = Instant::now();
+        let mut b = Backoff::default();
+        b.fail(t0);
+        assert!(!b.ready(t0 + Duration::from_millis(999)));
+        assert!(b.ready(t0 + Duration::from_secs(1)));
+        b.fail(t0);
+        assert!(!b.ready(t0 + Duration::from_millis(1999)));
+        assert!(b.ready(t0 + Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn wait_caps_at_sixty_seconds() {
+        let t0 = Instant::now();
+        let mut b = Backoff::default();
+        for _ in 0..20 {
+            b.fail(t0);
+        }
+        assert!(!b.ready(t0 + Duration::from_secs(59)));
+        assert!(b.ready(t0 + Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn route_dead_cases() {
+        assert!(route_dead(true, 5, 5));
+        assert!(!route_dead(true, 5, 6));
+        assert!(!route_dead(false, 5, 5));
+    }
 
     fn stream(obj: u64, pid: u32, binary: &str, bundle: &str) -> StreamInfo {
         StreamInfo {

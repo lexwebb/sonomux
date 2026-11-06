@@ -9,7 +9,7 @@ use crate::coreaudio::{CoreAudioManager, Device};
 use crate::coreaudio_channels::resolve_output;
 use crate::coreaudio_tap::AppRoute;
 use crate::routing_logic::DeviceIds;
-use crate::routing_logic::{any_playing, keep_route};
+use crate::routing_logic::{any_playing, keep_route, route_dead, Backoff};
 pub use crate::routing_logic::{plan, target_sink, RouteKey};
 use sonomux_core::{DevicesConfig, RoutingConfig};
 use std::collections::HashMap;
@@ -28,6 +28,12 @@ fn device_ids(key: &RouteKey, all: &[Device]) -> DeviceIds {
 fn routes() -> &'static Mutex<Live> {
     static ROUTES: OnceLock<Mutex<Live>> = OnceLock::new();
     ROUTES.get_or_init(Default::default)
+}
+
+// ponytail: one global map keyed like routes; per-key state lives with the route if this grows
+fn backoffs() -> &'static Mutex<HashMap<RouteKey, Backoff>> {
+    static BACKOFFS: OnceLock<Mutex<HashMap<RouteKey, Backoff>>> = OnceLock::new();
+    BACKOFFS.get_or_init(Default::default)
 }
 
 /// Hardware UID and first output channel (0-based) that a device plays to: a split device
@@ -70,19 +76,29 @@ pub fn sync(routing: &RoutingConfig, devices: &DevicesConfig) -> usize {
         },
     );
 
+    let now = std::time::Instant::now();
     let mut live = routes().lock().unwrap();
+    let mut backoff = backoffs().lock().unwrap();
+    backoff.retain(|k, _| desired.contains_key(k));
     live.retain(|key, (procs, ids, frames, route)| {
-        let now = route.frames();
+        let now_frames = route.frames();
+        let playing = any_playing(&streams, procs);
+        let dead = route_dead(playing, *frames, now_frames);
         let keep = keep_route(
             desired.get(key),
             procs,
             *ids,
             device_ids(key, &all),
-            any_playing(&streams, procs),
+            playing,
             *frames,
-            now,
+            now_frames,
         );
-        *frames = now;
+        if !keep && dead {
+            backoff.entry(key.clone()).or_default().fail(now);
+        } else if keep && playing && now_frames > *frames {
+            backoff.remove(key);
+        }
+        *frames = now_frames;
         if !keep {
             debug!("Dropping route {:?}", key);
         }
@@ -90,6 +106,9 @@ pub fn sync(routing: &RoutingConfig, devices: &DevicesConfig) -> usize {
     });
     for (key, procs) in desired {
         if live.contains_key(&key) {
+            continue;
+        }
+        if backoff.get(&key).is_some_and(|b| !b.ready(now)) {
             continue;
         }
         let (source, target, first) = &key;
@@ -110,7 +129,13 @@ pub fn sync(routing: &RoutingConfig, devices: &DevicesConfig) -> usize {
                 let ids = device_ids(&key, &all);
                 live.insert(key, (procs, ids, 0, route));
             }
-            Err(e) => warn!("Could not route {:?}: {}", key, e),
+            Err(e) => {
+                if backoff.entry(key.clone()).or_default().fail(now) {
+                    warn!("Could not route {:?}: {} (will retry with backoff)", key, e);
+                } else {
+                    debug!("Could not route {:?}: {}", key, e);
+                }
+            }
         }
     }
     live.values().map(|(p, ..)| p.len()).sum()
