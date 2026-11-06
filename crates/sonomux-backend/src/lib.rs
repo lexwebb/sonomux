@@ -9,6 +9,7 @@ pub mod coreaudio_routing;
 #[cfg(target_os = "macos")]
 pub mod coreaudio_tap;
 pub mod pulse;
+pub mod routing_logic;
 
 use async_trait::async_trait;
 pub use pulse::PulseManager;
