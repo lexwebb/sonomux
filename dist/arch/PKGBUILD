@@ -12,6 +12,8 @@ optdepends=('goxlr-utility: TC-Helicon GoXLR / GoXLR Mini support'
             'headsetcontrol: wireless headset presence and battery')
 makedepends=('cargo' 'git')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+# TODO(release): replace SKIP with the real checksum once tag v$pkgver exists:
+#   run `updpkgsums` (pacman-contrib) in this directory, then commit the result.
 sha256sums=('SKIP')
 
 prepare() {
