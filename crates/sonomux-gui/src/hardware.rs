@@ -13,6 +13,15 @@ enum ArchPkg {
     Aur(&'static str),
 }
 
+/// A macOS installer pinned to one upstream release. Upstream packages are unsigned, so the
+/// SHA-256 recorded here is the only check; bump version and both hashes together.
+struct MacPkg {
+    repo: &'static str,
+    version: &'static str,
+    sha256_arm: &'static str,
+    sha256_intel: &'static str,
+}
+
 pub struct Helper {
     /// Hardware it serves, as shown to the user.
     pub device: &'static str,
@@ -23,8 +32,8 @@ pub struct Helper {
     mac_app: Option<&'static str>,
     homepage: &'static str,
     arch: ArchPkg,
-    /// GitHub repo with macOS .pkg releases, if any.
-    mac_pkg_repo: Option<&'static str>,
+    /// Pinned macOS .pkg release, if any.
+    mac_pkg: Option<MacPkg>,
 }
 
 pub const HELPERS: &[Helper] = &[
@@ -36,7 +45,12 @@ pub const HELPERS: &[Helper] = &[
         mac_app: Some("/Applications/GoXLR Utility.app"),
         homepage: "https://github.com/GoXLR-on-Linux/goxlr-utility",
         arch: ArchPkg::Aur("goxlr-utility"),
-        mac_pkg_repo: Some("GoXLR-on-Linux/goxlr-utility"),
+        mac_pkg: Some(MacPkg {
+            repo: "GoXLR-on-Linux/goxlr-utility",
+            version: "1.2.4",
+            sha256_arm: "2799d0861592e6bbd4fc21b4d6bf9c7c475c9306785c9ae61da5ee9f8da50468",
+            sha256_intel: "392ed62e1a2df9862336b20420baf8c40b988538851b88a778fe1a0c2a858ec1",
+        }),
     },
     Helper {
         device: "SteelSeries headset",
@@ -46,7 +60,7 @@ pub const HELPERS: &[Helper] = &[
         mac_app: None,
         homepage: "https://github.com/Sapd/HeadsetControl",
         arch: ArchPkg::Repo("headsetcontrol"),
-        mac_pkg_repo: None,
+        mac_pkg: None,
     },
 ];
 
@@ -98,7 +112,7 @@ pub fn installed(h: &Helper) -> bool {
 /// What the install button does here, as its label.
 pub fn action_label(h: &Helper) -> String {
     let direct = if cfg!(target_os = "macos") {
-        h.mac_pkg_repo.is_some()
+        h.mac_pkg.is_some()
     } else {
         which("pacman").is_some()
     };
@@ -138,10 +152,20 @@ fn open_url(url: &str) -> Result<(), String> {
 /// prompt where one is needed.
 pub fn install(h: &Helper) -> Result<(), String> {
     if cfg!(target_os = "macos") {
-        let Some(repo) = h.mac_pkg_repo else {
+        let Some(mp) = &h.mac_pkg else {
             return open_url(h.homepage);
         };
-        let pkg = download_mac_pkg(repo)?;
+        let pkg = match download_mac_pkg(mp) {
+            Ok(p) => p,
+            Err(e) => {
+                // Let the user fetch it manually; still report why we didn't.
+                let _ = open_url(&format!(
+                    "https://github.com/{}/releases/tag/v{}",
+                    mp.repo, mp.version
+                ));
+                return Err(e);
+            }
+        };
         // Installer.app asks for the admin password itself.
         return Command::new("open")
             .arg(&pkg)
@@ -179,37 +203,49 @@ pub fn install(h: &Helper) -> Result<(), String> {
     }
 }
 
-/// Download the latest release's macOS .pkg for this Mac's CPU; returns its path.
-fn download_mac_pkg(repo: &str) -> Result<std::path::PathBuf, String> {
-    let api = format!("https://api.github.com/repos/{}/releases/latest", repo);
-    let out = Command::new("curl")
-        .args(["-fsSL", "-H", "Accept: application/vnd.github+json", &api])
-        .output()
-        .map_err(|e| e.to_string())?;
-    let release: serde_json::Value =
-        serde_json::from_slice(&out.stdout).map_err(|e| format!("release info: {}", e))?;
-    let arch = if cfg!(target_arch = "aarch64") {
-        "-m1.pkg"
+/// The hex digest from `shasum -a 256 <file>` output ("<hex>  <path>").
+fn parse_shasum(out: &str) -> Option<String> {
+    let tok = out.split_whitespace().next()?;
+    (tok.len() == 64 && tok.bytes().all(|b| b.is_ascii_hexdigit())).then(|| tok.to_lowercase())
+}
+
+/// Download the pinned release's macOS .pkg for this Mac's CPU and verify its SHA-256;
+/// returns its path. A file that fails the check is deleted.
+fn download_mac_pkg(mp: &MacPkg) -> Result<std::path::PathBuf, String> {
+    let (suffix, want) = if cfg!(target_arch = "aarch64") {
+        ("m1", mp.sha256_arm)
     } else {
-        "-intel.pkg"
+        ("intel", mp.sha256_intel)
     };
-    let (name, url) = release["assets"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|a| Some((a["name"].as_str()?, a["browser_download_url"].as_str()?)))
-        .find(|(n, _)| n.contains("macos") && n.ends_with(arch))
-        .ok_or("no macOS installer in the latest release")?;
-    let dest = std::env::temp_dir().join(name);
+    let name = format!("goxlr-utility-macos-{}-{}.pkg", mp.version, suffix);
+    let url = format!(
+        "https://github.com/{}/releases/download/v{}/{}",
+        mp.repo, mp.version, name
+    );
+    let dest = std::env::temp_dir().join(&name);
     let ok = Command::new("curl")
-        .args(["-fsSL", "-o"])
+        .args(["-fsSL", "--proto", "=https", "--max-time", "300", "-o"])
         .arg(&dest)
-        .arg(url)
+        .arg(&url)
         .status()
         .map_err(|e| e.to_string())?
         .success();
     if !ok {
+        let _ = std::fs::remove_file(&dest);
         return Err(format!("download of {} failed", name));
+    }
+    let got = Command::new("shasum")
+        .args(["-a", "256"])
+        .arg(&dest)
+        .output()
+        .ok()
+        .and_then(|o| parse_shasum(&String::from_utf8_lossy(&o.stdout)));
+    if got.as_deref() != Some(want) {
+        let _ = std::fs::remove_file(&dest);
+        return Err(format!(
+            "{} download failed its checksum; not installing",
+            name
+        ));
     }
     Ok(dest)
 }
@@ -232,6 +268,32 @@ mod tests {
         assert_eq!(vendors.len(), HELPERS.len());
         assert!(HELPERS.iter().all(|h| !h.binaries.is_empty()));
     }
+
+    const HASH: &str = "2799d0861592e6bbd4fc21b4d6bf9c7c475c9306785c9ae61da5ee9f8da50468";
+
+    #[test]
+    fn parses_shasum_output() {
+        assert_eq!(
+            parse_shasum(&format!("{}  /tmp/x.pkg\n", HASH)),
+            Some(HASH.to_string())
+        );
+        assert_eq!(
+            parse_shasum(&format!("{}  /tmp/x.pkg", HASH.to_uppercase())),
+            Some(HASH.to_string())
+        );
+        assert_eq!(parse_shasum(""), None);
+        assert_eq!(parse_shasum("nothex  /tmp/x"), None);
+        assert_eq!(parse_shasum(&format!("{}  /tmp/x", &HASH[..63])), None);
+    }
+
+    #[test]
+    fn goxlr_pin_is_well_formed() {
+        let mp = HELPERS[0].mac_pkg.as_ref().unwrap();
+        assert!(!mp.version.is_empty());
+        for h in [mp.sha256_arm, mp.sha256_intel] {
+            assert!(h.len() == 64 && h.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')));
+        }
+    }
 }
 
 #[cfg(all(test, target_os = "macos"))]
@@ -240,10 +302,12 @@ mod live {
     #[test]
     #[ignore]
     fn downloads_goxlr_utility_pkg() {
-        let pkg = super::download_mac_pkg("GoXLR-on-Linux/goxlr-utility").unwrap();
+        let mp = super::HELPERS[0].mac_pkg.as_ref().unwrap();
+        let pkg = super::download_mac_pkg(mp).unwrap();
         let name = pkg.file_name().unwrap().to_string_lossy().to_string();
         assert!(
-            name.starts_with("goxlr-utility-macos-") && name.ends_with(".pkg"),
+            name == "goxlr-utility-macos-1.2.4-m1.pkg"
+                || name == "goxlr-utility-macos-1.2.4-intel.pkg",
             "{}",
             name
         );
