@@ -79,7 +79,7 @@ const HW_DEVICES: u32 = fourcc(b"dev#");
 const HW_PROCESSES: u32 = fourcc(b"prs#");
 const OBJ_NAME: u32 = fourcc(b"lnam");
 const DEV_UID: u32 = fourcc(b"uid ");
-const DEV_STREAMS: u32 = fourcc(b"stm#");
+pub(crate) const DEV_STREAMS: u32 = fourcc(b"stm#");
 pub(crate) const DEV_PREFERRED_STEREO: u32 = fourcc(b"dch2");
 const DEV_STREAM_CONFIG: u32 = fourcc(b"slay");
 const PROC_PID: u32 = fourcc(b"ppid");
@@ -99,7 +99,7 @@ fn addr(selector: u32, scope: u32) -> Address {
     }
 }
 
-fn data_size(id: u32, selector: u32, scope: u32) -> Option<u32> {
+pub(crate) fn data_size(id: u32, selector: u32, scope: u32) -> Option<u32> {
     let mut size = 0u32;
     let st = unsafe {
         AudioObjectGetPropertyDataSize(id, &addr(selector, scope), 0, std::ptr::null(), &mut size)

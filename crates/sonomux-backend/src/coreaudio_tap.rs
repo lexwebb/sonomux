@@ -182,6 +182,7 @@ impl AppRoute {
             "AudioDeviceCreateIOProcID",
         )?;
         route.proc_id = proc_id;
+        tap_input_only(aggregate, proc_id)?;
         check(
             unsafe { AudioDeviceStart(aggregate, proc_id) },
             "AudioDeviceStart",
@@ -220,6 +221,49 @@ fn buffers_mut(list: &mut AudioBufferList) -> &mut [AudioBuffer] {
     unsafe {
         std::slice::from_raw_parts_mut(list.mBuffers.as_mut_ptr(), list.mNumberBuffers as usize)
     }
+}
+
+/// Switch off every input stream of the aggregate except the tap (the last one), so the route
+/// never opens the device's microphone. Without this, macOS shows sonomuxd using the mic and
+/// the device runs input IO for us next to apps in a call.
+fn tap_input_only(
+    aggregate: AudioObjectID,
+    proc_id: AudioDeviceIOProcID,
+) -> Result<(), BackendError> {
+    use crate::coreaudio::{data_size, DEV_STREAMS, SCOPE_INPUT};
+    use objc2_core_audio::{kAudioDevicePropertyIOProcStreamUsage, AudioObjectPropertyAddress};
+    let n = data_size(aggregate, DEV_STREAMS, SCOPE_INPUT).unwrap_or(0) as usize / 4;
+    if n < 2 {
+        return Ok(()); // only the tap: nothing to switch off
+    }
+    // AudioHardwareIOProcStreamUsage: { void *mIOProc; UInt32 mNumberStreams; UInt32 mStreamIsOn[n]; }
+    let size = 12 + 4 * n;
+    let mut buf = vec![0u64; size.div_ceil(8)];
+    let bytes = buf.as_mut_ptr() as *mut u8;
+    let proc_ptr = proc_id.map_or(std::ptr::null(), |f| f as *const c_void);
+    unsafe {
+        (bytes as *mut *const c_void).write(proc_ptr);
+        (bytes.add(8) as *mut u32).write(n as u32);
+        (bytes.add(12 + 4 * (n - 1)) as *mut u32).write(1);
+    }
+    let addr = AudioObjectPropertyAddress {
+        mSelector: kAudioDevicePropertyIOProcStreamUsage,
+        mScope: SCOPE_INPUT,
+        mElement: 0,
+    };
+    check(
+        unsafe {
+            objc2_core_audio::AudioObjectSetPropertyData(
+                aggregate,
+                NonNull::from(&addr),
+                0,
+                std::ptr::null(),
+                size as u32,
+                NonNull::new_unchecked(bytes.cast()),
+            )
+        },
+        "IOProcStreamUsage",
+    )
 }
 
 /// Real-time thread: no allocation, no locks, no logging.
