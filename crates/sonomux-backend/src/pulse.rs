@@ -1,9 +1,43 @@
 use crate::BackendError;
 use serde_json::Value;
 use sonomux_core::{AppClassifier, DevicesConfig, PoliciesConfig, RoutingConfig, StreamInfo};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use tokio::process::Command;
 use tracing::{debug, info, warn};
+
+/// Listings stay fresh this long. A daemon tick asks for the same listings several times
+/// within milliseconds; anything that changes the graph clears the cache.
+const PACTL_READ_TTL: Duration = Duration::from_millis(500);
+
+type ReadCache = HashMap<Vec<String>, (Instant, Vec<u8>)>;
+
+static READ_CACHE: Mutex<Option<ReadCache>> = Mutex::new(None);
+
+/// stdout of a read-only pactl command, reused within PACTL_READ_TTL.
+async fn pactl_read(args: &[&str]) -> std::io::Result<Vec<u8>> {
+    let key: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+    {
+        let guard = READ_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((at, stdout)) = guard.as_ref().and_then(|c| c.get(&key)) {
+            if at.elapsed() < PACTL_READ_TTL {
+                return Ok(stdout.clone());
+            }
+        }
+    }
+    let output = Command::new("pactl").args(args).output().await?;
+    let mut guard = READ_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    guard
+        .get_or_insert_with(HashMap::new)
+        .insert(key, (Instant::now(), output.stdout.clone()));
+    Ok(output.stdout)
+}
+
+/// Forget cached listings; call after anything that moves streams or loads/unloads modules.
+fn pactl_invalidate() {
+    *READ_CACHE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct PulseManager;
@@ -15,13 +49,8 @@ impl PulseManager {
 
     /// Check if an audio sink exists in the system.
     pub async fn sink_exists(name: &str) -> bool {
-        let output = Command::new("pactl")
-            .args(["list", "sinks", "short"])
-            .output()
-            .await;
-
-        if let Ok(out) = output {
-            let stdout = String::from_utf8_lossy(&out.stdout);
+        if let Ok(out) = pactl_read(&["list", "sinks", "short"]).await {
+            let stdout = String::from_utf8_lossy(&out);
             Self::parse_exists(&stdout, name)
         } else {
             false
@@ -30,13 +59,8 @@ impl PulseManager {
 
     /// Check if an audio source exists in the system.
     pub async fn source_exists(name: &str) -> bool {
-        let output = Command::new("pactl")
-            .args(["list", "sources", "short"])
-            .output()
-            .await;
-
-        if let Ok(out) = output {
-            let stdout = String::from_utf8_lossy(&out.stdout);
+        if let Ok(out) = pactl_read(&["list", "sources", "short"]).await {
+            let stdout = String::from_utf8_lossy(&out);
             Self::parse_exists(&stdout, name)
         } else {
             false
@@ -53,13 +77,9 @@ impl PulseManager {
 
     /// Find the PulseAudio module ID of an active module-loopback matching the given source.
     pub async fn find_loopback_module(source_name: &str) -> Option<u32> {
-        let output = Command::new("pactl")
-            .args(["list", "modules", "short"])
-            .output()
-            .await
-            .ok()?;
+        let output = pactl_read(&["list", "modules", "short"]).await.ok()?;
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stdout = String::from_utf8_lossy(&output);
         Self::parse_loopback_module_id(&stdout, source_name)
     }
 
@@ -97,14 +117,11 @@ impl PulseManager {
     /// This fixes the silent fallback bug where reconnecting GoXLR causes loopback to capture default mic.
     pub async fn is_loopback_healthy(module_id: u32, expected_source: &str) -> bool {
         // 1. Get index of the expected source
-        let sources_out = Command::new("pactl")
-            .args(["list", "sources", "short"])
-            .output()
-            .await;
+        let sources_out = pactl_read(&["list", "sources", "short"]).await;
 
         let target_idx = match sources_out {
             Ok(out) => {
-                let stdout = String::from_utf8_lossy(&out.stdout);
+                let stdout = String::from_utf8_lossy(&out);
                 match Self::parse_source_index(&stdout, expected_source) {
                     Some(idx) => idx,
                     None => return false,
@@ -114,13 +131,10 @@ impl PulseManager {
         };
 
         // 2. Query source-outputs in JSON
-        let outputs_out = Command::new("pactl")
-            .args(["-f", "json", "list", "source-outputs"])
-            .output()
-            .await;
+        let outputs_out = pactl_read(&["-f", "json", "list", "source-outputs"]).await;
 
         if let Ok(out) = outputs_out {
-            if let Ok(val) = serde_json::from_slice::<Value>(&out.stdout) {
+            if let Ok(val) = serde_json::from_slice::<Value>(&out) {
                 return Self::is_stream_on_source(&val, module_id, target_idx);
             }
         }
@@ -180,7 +194,9 @@ impl PulseManager {
                 &format!("latency_msec={}", latency_ms),
             ])
             .output()
-            .await
+            .await;
+        pactl_invalidate();
+        let output = output
             .map_err(|e| BackendError::Connection(format!("Failed to load module: {}", e)))?;
 
         if !output.status.success() {
@@ -206,10 +222,11 @@ impl PulseManager {
         let output = Command::new("pactl")
             .args(["unload-module", &module_id.to_string()])
             .output()
-            .await
-            .map_err(|e| {
-                BackendError::Connection(format!("Failed to execute pactl unload-module: {}", e))
-            })?;
+            .await;
+        pactl_invalidate();
+        let output = output.map_err(|e| {
+            BackendError::Connection(format!("Failed to execute pactl unload-module: {}", e))
+        })?;
 
         if !output.status.success() {
             let err = String::from_utf8_lossy(&output.stderr);
@@ -288,20 +305,16 @@ impl PulseManager {
         system_sink: &str,
         keep_off_apps: &[&str],
     ) -> Result<(), BackendError> {
-        let inputs_out = Command::new("pactl")
-            .args(["-f", "json", "list", "sink-inputs"])
-            .output()
+        let inputs_out = pactl_read(&["-f", "json", "list", "sink-inputs"])
             .await
             .map_err(|e| BackendError::Connection(e.to_string()))?;
 
-        let sinks_out = Command::new("pactl")
-            .args(["-f", "json", "list", "sinks"])
-            .output()
+        let sinks_out = pactl_read(&["-f", "json", "list", "sinks"])
             .await
             .map_err(|e| BackendError::Connection(e.to_string()))?;
 
-        let sinks_json: Value = serde_json::from_slice(&sinks_out.stdout).unwrap_or(Value::Null);
-        let inputs_json: Value = serde_json::from_slice(&inputs_out.stdout).unwrap_or(Value::Null);
+        let sinks_json: Value = serde_json::from_slice(&sinks_out).unwrap_or(Value::Null);
+        let inputs_json: Value = serde_json::from_slice(&inputs_out).unwrap_or(Value::Null);
 
         let moves = Self::compute_surround_moves(
             &inputs_json,
@@ -322,6 +335,7 @@ impl PulseManager {
                 .args(["move-sink-input", &stream_idx.to_string(), &target_sink])
                 .status()
                 .await;
+            pactl_invalidate();
         }
 
         Ok(())
@@ -501,20 +515,16 @@ impl PulseManager {
 
     /// Fetch all active sink-inputs from PipeWire.
     pub async fn get_active_streams() -> Result<Vec<StreamInfo>, BackendError> {
-        let inputs_out = Command::new("pactl")
-            .args(["-f", "json", "list", "sink-inputs"])
-            .output()
+        let inputs_out = pactl_read(&["-f", "json", "list", "sink-inputs"])
             .await
             .map_err(|e| BackendError::Connection(e.to_string()))?;
 
-        let sinks_out = Command::new("pactl")
-            .args(["-f", "json", "list", "sinks"])
-            .output()
+        let sinks_out = pactl_read(&["-f", "json", "list", "sinks"])
             .await
             .map_err(|e| BackendError::Connection(e.to_string()))?;
 
-        let sinks_json: Value = serde_json::from_slice(&sinks_out.stdout).unwrap_or(Value::Null);
-        let inputs_json: Value = serde_json::from_slice(&inputs_out.stdout).unwrap_or(Value::Null);
+        let sinks_json: Value = serde_json::from_slice(&sinks_out).unwrap_or(Value::Null);
+        let inputs_json: Value = serde_json::from_slice(&inputs_out).unwrap_or(Value::Null);
 
         let mut sink_id_to_name = std::collections::HashMap::new();
         if let Some(sinks) = sinks_json.as_array() {
@@ -542,8 +552,9 @@ impl PulseManager {
         let output = Command::new("pactl")
             .args(["move-sink-input", &stream_idx.to_string(), target_sink])
             .output()
-            .await
-            .map_err(|e| BackendError::Connection(e.to_string()))?;
+            .await;
+        pactl_invalidate();
+        let output = output.map_err(|e| BackendError::Connection(e.to_string()))?;
 
         if !output.status.success() {
             let err = String::from_utf8_lossy(&output.stderr);
@@ -614,13 +625,10 @@ impl PulseManager {
             return sink.to_string();
         }
 
-        let inputs_out = Command::new("pactl")
-            .args(["list", "sink-inputs"])
-            .output()
-            .await;
+        let inputs_out = pactl_read(&["list", "sink-inputs"]).await;
 
         if let Ok(out) = inputs_out {
-            let stdout = String::from_utf8_lossy(&out.stdout);
+            let stdout = String::from_utf8_lossy(&out);
             if let Some(target_idx) = Self::parse_downstream_target_index(&stdout, sink) {
                 return Self::get_sink_name_by_index(&target_idx)
                     .await
@@ -643,13 +651,9 @@ impl PulseManager {
     }
 
     pub async fn get_sink_name_by_index(index: &str) -> Option<String> {
-        let output = Command::new("pactl")
-            .args(["list", "sinks", "short"])
-            .output()
-            .await
-            .ok()?;
+        let output = pactl_read(&["list", "sinks", "short"]).await.ok()?;
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stdout = String::from_utf8_lossy(&output);
         Self::parse_sink_name_by_index(&stdout, index)
     }
 }
