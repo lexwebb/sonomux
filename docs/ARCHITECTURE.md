@@ -107,32 +107,18 @@ pub trait HasHardwareVolume: AudioDevice {
 
 The audio backend connects Sonomux's policy engine to the host OS sound server.
 
-```rust
-#[async_trait]
-pub trait AudioBackend: Send + Sync {
-    /// Watch for sink/source lifecycle events.
-    async fn watch_graph(&self) -> Result<Receiver<GraphEvent>, BackendError>;
-    
-    /// Resolve a virtual/DSP sink down to its physical host sink.
-    async fn resolve_effective_sink(&self, sink_name: &str) -> Result<String, BackendError>;
-    
-    /// Pin an application stream (by process or app name) to a specific sink.
-    async fn route_stream(&self, app_name: &str, target_sink: &str) -> Result<(), BackendError>;
-    
-    /// Ensure a low-latency loopback exists between a source and sink, re-linking if severed.
-    async fn ensure_loopback(&self, source_name: &str, sink_name: &str, latency_ms: u32) -> Result<LoopbackId, BackendError>;
-    async fn remove_loopback(&self, id: LoopbackId) -> Result<(), BackendError>;
-}
-```
+There is no backend trait. `sonomux_backend::Backend` is a type alias chosen at compile time: `PulseManager` (`pactl`, `crates/sonomux-backend/src/pulse.rs`) on Linux and `CoreAudioManager` (`crates/sonomux-backend/src/coreaudio.rs`) on macOS. Both provide the same associated functions (for example `sink_exists`, `source_exists`, `get_active_streams`, `enforce_stream_routing`, `ensure_loopback`), and callers use `Backend::...`.
 
 ### 3.1 Linux Implementation: PipeWire & Libpulse
 - Monitors PipeWire graph changes using libpipewire / libpulse event loops.
 - Replaces periodic polling with event-driven reactions: when a stream is announced, its metadata is compared against user policy rules immediately.
 - Implements the Omarchy volume law: follows `sink-input` streams from virtual nodes (Virtual Surround, EasyEffects) down to the underlying ALSA hardware node.
 
-### 3.2 macOS Implementation: CoreAudio (Future)
-- Uses CoreAudio HAL and Aggregate Audio Device APIs.
-- Creates virtual multi-channel routing harnesses without requiring external proprietary software.
+### 3.2 macOS Implementation: CoreAudio
+- Multichannel hardware gets one aggregate "split" device per stereo pair (`coreaudio_channels.rs`).
+- Per-app routing uses process taps and a private aggregate per route (`coreaudio_tap.rs`, `coreaudio_routing.rs`).
+- The daemon keeps the configured default input and output.
+- Loopbacks are not supported on macOS yet.
 
 ---
 
