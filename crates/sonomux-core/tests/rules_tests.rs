@@ -295,3 +295,71 @@ fn test_action_route_stream_serialization() {
     let parsed: Action = toml::from_str(&toml_str).expect("Failed to deserialize action");
     assert_eq!(parsed, act);
 }
+
+fn sample_rule(enabled: bool) -> Rule {
+    Rule {
+        name: "R".to_string(),
+        enabled,
+        trigger: Trigger::DeviceStatus {
+            device_id: "headset".to_string(),
+            status: DeviceStatus::Active,
+        },
+        actions_on_enter: vec![Action::SetHardwareVolume {
+            device_id: "goxlr".to_string(),
+            channel: "Headphones".to_string(),
+            level: 0.0,
+        }],
+        actions_on_exit: vec![Action::SetHardwareVolume {
+            device_id: "goxlr".to_string(),
+            channel: "Headphones".to_string(),
+            level: 1.0,
+        }],
+    }
+}
+
+fn active_ctx() -> RuleContext {
+    RuleContext::new().with_device_status("headset", DeviceStatus::Active)
+}
+
+#[test]
+fn test_set_rules_keeps_active_state() {
+    let mut e = RuleEngine::new(vec![sample_rule(true)]);
+    assert_eq!(e.evaluate(&active_ctx()).len(), 1);
+    assert!(e.set_rules(vec![sample_rule(true)]).is_empty());
+    assert!(e.is_rule_active("R"));
+    assert!(e.evaluate(&active_ctx()).is_empty());
+}
+
+#[test]
+fn test_disabling_active_rule_runs_exit_actions() {
+    let mut e = RuleEngine::new(vec![sample_rule(true)]);
+    e.evaluate(&active_ctx());
+    let acts = e.set_rules(vec![sample_rule(false)]);
+    assert_eq!(acts, sample_rule(true).actions_on_exit);
+    assert!(!e.is_rule_active("R"));
+}
+
+#[test]
+fn test_removing_active_rule_runs_exit_actions() {
+    let mut e = RuleEngine::new(vec![sample_rule(true)]);
+    e.evaluate(&active_ctx());
+    assert_eq!(e.set_rules(vec![]), sample_rule(true).actions_on_exit);
+}
+
+#[test]
+fn test_disabling_inactive_rule_runs_nothing() {
+    let mut e = RuleEngine::new(vec![sample_rule(true)]);
+    assert!(e.set_rules(vec![sample_rule(false)]).is_empty());
+}
+
+#[test]
+fn test_reenabled_rule_enters_on_next_evaluate() {
+    let mut e = RuleEngine::new(vec![sample_rule(true)]);
+    e.evaluate(&active_ctx());
+    assert_eq!(e.set_rules(vec![sample_rule(false)]).len(), 1);
+    assert!(e.set_rules(vec![sample_rule(true)]).is_empty());
+    assert_eq!(
+        e.evaluate(&active_ctx()),
+        sample_rule(true).actions_on_enter
+    );
+}
