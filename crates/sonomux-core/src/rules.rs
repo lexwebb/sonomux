@@ -236,6 +236,25 @@ impl RuleEngine {
         &self.rules
     }
 
+    /// Replace the rules, keeping which ones are active. A rule that was active and is now
+    /// disabled or gone exits: its exit actions (from its old definition) are returned so the
+    /// caller can run them. Nothing enters here; that happens on the next `evaluate`.
+    pub fn set_rules(&mut self, rules: Vec<Rule>) -> Vec<Action> {
+        let mut actions = Vec::new();
+        for old in &self.rules {
+            if !self.is_rule_active(&old.name) {
+                continue;
+            }
+            let still_enabled = rules.iter().any(|r| r.name == old.name && r.enabled);
+            if !still_enabled {
+                actions.extend(old.actions_on_exit.iter().cloned());
+                self.active_rules.insert(old.name.clone(), false);
+            }
+        }
+        self.rules = rules;
+        actions
+    }
+
     pub fn is_rule_active(&self, rule_name: &str) -> bool {
         self.active_rules.get(rule_name).copied().unwrap_or(false)
     }

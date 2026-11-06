@@ -132,10 +132,11 @@ async fn main() -> anyhow::Result<()> {
                         }
 
                         // Evaluate rules against updated context
+                        let live_cfg = config_shared.lock().await.clone();
                         evaluate_and_dispatch(
                             &headset,
                             &goxlr,
-                            &config,
+                            &live_cfg,
                             &shared_state,
                             &state_store,
                             &mut rule_engine,
@@ -149,10 +150,11 @@ async fn main() -> anyhow::Result<()> {
                             s.battery_pct = percentage;
                         }
 
+                        let live_cfg = config_shared.lock().await.clone();
                         evaluate_and_dispatch(
                             &headset,
                             &goxlr,
-                            &config,
+                            &live_cfg,
                             &shared_state,
                             &state_store,
                             &mut rule_engine,
@@ -323,6 +325,21 @@ async fn evaluate_and_dispatch(
     rule_engine: &mut RuleEngine,
     current_loopback_id: &mut Option<u32>,
 ) {
+    // Pick up rule edits (e.g. the GUI's rule switches). Disabled or removed rules that were
+    // active exit here, so their exit actions (like restoring the speakers) still run.
+    if rule_engine.rules() != config.rules.as_slice() {
+        let exits = rule_engine.set_rules(config.rules.clone());
+        if !exits.is_empty() {
+            let mut executor = ActionExecutor {
+                goxlr,
+                state_store,
+                shared_state,
+                current_loopback_id: &mut *current_loopback_id,
+            };
+            executor.execute_actions(&exits).await;
+        }
+    }
+
     let headset_status = headset.status().await;
     let goxlr_status = goxlr.status().await;
     let battery = {
