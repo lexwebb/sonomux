@@ -395,6 +395,36 @@ fn test_compute_routing_moves_fallback_when_surround_unavailable() {
 }
 
 #[test]
+fn test_compute_routing_moves_surround_override() {
+    let mut routing_config = sonomux_core::RoutingConfig::default();
+    routing_config
+        .app_overrides
+        .insert("myapp".to_string(), "Surround".to_string());
+    let devices = sonomux_core::DevicesConfig::default();
+    let policies = sonomux_core::PoliciesConfig::default();
+
+    let mut stream = sonomux_core::StreamInfo::new(7, 10);
+    stream.app_name = "myapp".to_string();
+    stream.binary = "myapp".to_string();
+    stream.sink_name = devices.goxlr_system_sink.clone();
+
+    let moves = PulseManager::compute_routing_moves(
+        &[stream.clone()],
+        &routing_config,
+        &devices,
+        &policies,
+        true,
+    );
+    assert_eq!(moves.len(), 1);
+    assert_eq!(moves[0].1, policies.surround_in_node);
+
+    let moves =
+        PulseManager::compute_routing_moves(&[stream], &routing_config, &devices, &policies, false);
+    assert_eq!(moves.len(), 1);
+    assert_eq!(moves[0].1, devices.goxlr_game_sink);
+}
+
+#[test]
 fn test_compute_routing_moves_keep_off_surround_enforced() {
     let routing_config = sonomux_core::RoutingConfig::default();
     let devices = sonomux_core::DevicesConfig::default();

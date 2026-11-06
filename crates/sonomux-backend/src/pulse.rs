@@ -1,6 +1,9 @@
 use crate::BackendError;
 use serde_json::Value;
-use sonomux_core::{AppClassifier, DevicesConfig, PoliciesConfig, RoutingConfig, StreamInfo};
+use sonomux_core::classification::channel_for;
+use sonomux_core::{
+    AppClassifier, ChannelTarget, DevicesConfig, PoliciesConfig, RoutingConfig, StreamInfo,
+};
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -452,37 +455,21 @@ impl PulseManager {
             // Classify application using multi-signal heuristics
             let category = AppClassifier::classify(stream, &routing_config.app_overrides);
 
-            // Determine target channel from configuration
-            let cat_key = match category {
-                sonomux_core::AppCategory::Game => "game",
-                sonomux_core::AppCategory::Chat => "chat",
-                sonomux_core::AppCategory::Music => "music",
-                sonomux_core::AppCategory::Browser => "browser",
-                sonomux_core::AppCategory::Production => "production",
-                sonomux_core::AppCategory::Soundboard => "soundboard",
-                sonomux_core::AppCategory::System => "system",
-            };
-
-            let target_channel = routing_config
-                .category_targets
-                .get(cat_key)
-                .map(|s| s.as_str())
-                .unwrap_or("System");
-
-            // Resolve target channel to physical/DSP sink
-            let target_sink = match target_channel {
-                "Surround" => {
+            // Resolve target channel (an override naming a channel wins) to physical/DSP sink
+            let channel = channel_for(stream, routing_config);
+            let target_sink = match channel {
+                ChannelTarget::Surround => {
                     if surround_available {
                         &policies.surround_in_node
                     } else {
                         &devices.goxlr_game_sink
                     }
                 }
-                "Game" => &devices.goxlr_game_sink,
-                "Chat" => &devices.goxlr_chat_sink,
-                "Music" => &devices.goxlr_music_sink,
-                "Sample" | "Soundboard" => &devices.goxlr_sample_sink,
-                _ => &devices.goxlr_system_sink,
+                ChannelTarget::Game => &devices.goxlr_game_sink,
+                ChannelTarget::Chat => &devices.goxlr_chat_sink,
+                ChannelTarget::Music => &devices.goxlr_music_sink,
+                ChannelTarget::Sample => &devices.goxlr_sample_sink,
+                ChannelTarget::System => &devices.goxlr_system_sink,
             };
 
             // Enforce keep_off_surround policy
@@ -504,7 +491,7 @@ impl PulseManager {
                         &stream.app_name
                     },
                     category,
-                    target_channel
+                    channel
                 );
                 moves.push((stream.index, effective_target.to_string(), reason));
             }
