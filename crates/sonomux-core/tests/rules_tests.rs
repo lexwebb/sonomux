@@ -363,3 +363,59 @@ fn test_reenabled_rule_enters_on_next_evaluate() {
         sample_rule(true).actions_on_enter
     );
 }
+
+#[test]
+fn test_default_rule_loses_loopback_dependent_actions() {
+    let original = default_rules();
+    let (rules, changed) = without_loopback_actions(original.clone());
+    assert_eq!(rules.len(), 1);
+    assert!(rules[0].actions_on_enter.is_empty());
+    assert!(rules[0].actions_on_exit.is_empty());
+    assert_eq!(changed, vec!["Auto Headset Switcher".to_string()]);
+    assert_eq!(rules[0].name, original[0].name);
+    assert_eq!(rules[0].trigger, original[0].trigger);
+    assert_eq!(rules[0].enabled, original[0].enabled);
+}
+
+#[test]
+fn test_rule_without_loopback_is_untouched() {
+    let rule = Rule {
+        name: "Volume only".to_string(),
+        actions_on_enter: vec![Action::SetHardwareVolume {
+            device_id: "goxlr".to_string(),
+            channel: "Headphones".to_string(),
+            level: 0.5,
+        }],
+        ..Rule::default()
+    };
+    let (rules, changed) = without_loopback_actions(vec![rule.clone()]);
+    assert_eq!(rules, vec![rule]);
+    assert!(changed.is_empty());
+}
+
+#[test]
+fn test_other_actions_are_kept() {
+    let command = Action::Command {
+        program: "notify-send".to_string(),
+        args: vec!["hi".to_string()],
+    };
+    let rule = Rule {
+        name: "Mixed".to_string(),
+        actions_on_enter: vec![
+            Action::EnsureLoopback {
+                source: "a".to_string(),
+                sink: "b".to_string(),
+                latency_ms: 20,
+            },
+            command.clone(),
+            Action::SetHardwareVolume {
+                device_id: "goxlr".to_string(),
+                channel: "Headphones".to_string(),
+                level: 0.0,
+            },
+        ],
+        ..Rule::default()
+    };
+    let (rules, _) = without_loopback_actions(vec![rule]);
+    assert_eq!(rules[0].actions_on_enter, vec![command]);
+}
