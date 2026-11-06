@@ -185,7 +185,7 @@ type InstallNotes = Arc<Mutex<HashMap<usize, String>>>;
 
 fn helper_rows(notes: &InstallNotes) -> Vec<(i32, String, String, String)> {
     let notes = notes.lock().unwrap();
-    hardware::detect()
+    hardware::detect_cached()
         .into_iter()
         .map(|(i, installed)| {
             let h = &hardware::HELPERS[i];
@@ -756,7 +756,9 @@ async fn main() -> anyhow::Result<()> {
             let (notes, refresh) = (Arc::clone(&notes), Arc::clone(&refresh));
             tokio::task::spawn_blocking(move || {
                 let mut n = notes.lock().unwrap();
-                match hardware::install(h) {
+                let result = hardware::install(h);
+                hardware::invalidate_detect();
+                match result {
                     // The system installer or terminal takes it from here; the row turns to
                     // "installed" once the helper appears.
                     Ok(()) => n.insert(
