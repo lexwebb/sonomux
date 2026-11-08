@@ -54,6 +54,22 @@ async fn main() -> anyhow::Result<()> {
 
     let config_shared = Arc::new(Mutex::new(config.clone()));
     let routing_kick = Arc::new(tokio::sync::Notify::new());
+    let surround_shared = Arc::new(Mutex::new(sonomux_backend::SurroundManager::new()));
+
+    // Start 7.1 Virtual Surround if enabled
+    if config.surround.enabled {
+        let target = if config.surround.target_sink == "goxlr_game_sink"
+            || config.surround.target_sink == "Game"
+        {
+            &config.devices.goxlr_game_sink
+        } else {
+            &config.surround.target_sink
+        };
+        let mut sm = surround_shared.lock().await;
+        if let Err(e) = sm.start(&config.surround, target).await {
+            warn!("Failed to start 7.1 Virtual Surround: {}", e);
+        }
+    }
 
     // Start D-Bus session service if enabled
     if config.daemon.dbus_enabled {
@@ -61,6 +77,7 @@ async fn main() -> anyhow::Result<()> {
             state: Arc::clone(&shared_state),
             goxlr: goxlr.clone(),
             config: Arc::clone(&config_shared),
+            surround: Arc::clone(&surround_shared),
             tokio_handle: tokio::runtime::Handle::current(),
             routing_kick: Arc::clone(&routing_kick),
         };
@@ -283,6 +300,8 @@ async fn main() -> anyhow::Result<()> {
             // 3. Graceful shutdown on Ctrl+C or SIGTERM
             _ = tokio::signal::ctrl_c() => {
                 info!("Shutdown signal (Ctrl+C) received. Cleaning up Sonomux daemon...");
+                let mut sm = surround_shared.lock().await;
+                let _ = sm.stop().await;
                 if let Some(id) = current_loopback_id {
                     let _ = Backend::unload_module(id).await;
                 }
@@ -300,6 +319,8 @@ async fn main() -> anyhow::Result<()> {
                 std::future::pending::<()>().await
             } => {
                 info!("Shutdown signal (SIGTERM) received. Cleaning up Sonomux daemon...");
+                let mut sm = surround_shared.lock().await;
+                let _ = sm.stop().await;
                 if let Some(id) = current_loopback_id {
                     let _ = Backend::unload_module(id).await;
                 }

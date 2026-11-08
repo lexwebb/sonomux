@@ -72,6 +72,8 @@ pub struct AppConfig {
     pub policies: PoliciesConfig,
     #[serde(default)]
     pub routing: RoutingConfig,
+    #[serde(default)]
+    pub surround: SurroundConfig,
     #[serde(default = "default_rules")]
     pub rules: Vec<Rule>,
 }
@@ -83,6 +85,7 @@ impl Default for AppConfig {
             devices: DevicesConfig::default(),
             policies: PoliciesConfig::default(),
             routing: RoutingConfig::default(),
+            surround: SurroundConfig::default(),
             rules: default_rules(),
         }
     }
@@ -252,6 +255,33 @@ impl Default for RoutingConfig {
             enabled: true,
             category_targets,
             app_overrides,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct SurroundConfig {
+    /// Whether native 7.1 virtual surround spatial processing is enabled.
+    pub enabled: bool,
+    /// Selected HRIR spatial profile (e.g., "atmos", "dtshx", "sbx100", "sonic", "oal_dflt").
+    pub profile: String,
+    /// Optional path to a custom 14-channel HeSuVi HRIR WAV file.
+    pub custom_wav: Option<String>,
+    /// Name of the 8-channel virtual surround sink in PipeWire.
+    pub sink_name: String,
+    /// Target hardware sink or channel name (e.g., "goxlr_game_sink" or "Game").
+    pub target_sink: String,
+}
+
+impl Default for SurroundConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            profile: "atmos".to_string(),
+            custom_wav: None,
+            sink_name: "effect_input.sonomux-surround".to_string(),
+            target_sink: "goxlr_game_sink".to_string(),
         }
     }
 }

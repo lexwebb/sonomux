@@ -21,6 +21,7 @@ pub struct SonomuxDbusService {
     pub state: Arc<Mutex<SharedDaemonState>>,
     pub goxlr: sonomux_device_goxlr::GoXLRClient,
     pub config: Arc<Mutex<sonomux_core::AppConfig>>,
+    pub surround: Arc<Mutex<sonomux_backend::SurroundManager>>,
     pub tokio_handle: tokio::runtime::Handle,
     /// Asks the main loop for a routing pass with the latest config. Handlers never route
     /// themselves, so passes never overlap or run on a stale config.
@@ -410,6 +411,66 @@ impl SonomuxDbusService {
             r.enabled = enabled;
             cfg.save()
                 .map_err(|e| zbus::fdo::Error::Failed(format!("Could not save config: {}", e)))?;
+        }
+        Ok(())
+    }
+
+    /// Return spatial surround state: (enabled, current_profile, available_profiles).
+    async fn get_surround_info(&self) -> (bool, String, Vec<String>) {
+        let cfg = self.config.lock().await;
+        let profiles = sonomux_backend::surround::list_available_profiles();
+        (cfg.surround.enabled, cfg.surround.profile.clone(), profiles)
+    }
+
+    /// Set spatial surround enabled state.
+    async fn set_surround_enabled(&self, enabled: bool) -> zbus::fdo::Result<()> {
+        let mut cfg = self.config.lock().await;
+        cfg.surround.enabled = enabled;
+        let _ = cfg.save();
+
+        let surround_cfg = cfg.surround.clone();
+        let target = if cfg.surround.target_sink == "goxlr_game_sink"
+            || cfg.surround.target_sink == "Game"
+        {
+            cfg.devices.goxlr_game_sink.clone()
+        } else {
+            cfg.surround.target_sink.clone()
+        };
+        let mgr = Arc::clone(&self.surround);
+
+        self.tokio_handle.spawn(async move {
+            let mut m = mgr.lock().await;
+            if enabled {
+                let _ = m.restart(&surround_cfg, &target).await;
+            } else {
+                let _ = m.stop().await;
+            }
+        });
+        Ok(())
+    }
+
+    /// Set spatial surround HRIR profile (e.g. "atmos", "dtshx", "sbx100").
+    async fn set_surround_profile(&self, profile: String) -> zbus::fdo::Result<()> {
+        let mut cfg = self.config.lock().await;
+        cfg.surround.profile = profile;
+        let _ = cfg.save();
+
+        let enabled = cfg.surround.enabled;
+        let surround_cfg = cfg.surround.clone();
+        let target = if cfg.surround.target_sink == "goxlr_game_sink"
+            || cfg.surround.target_sink == "Game"
+        {
+            cfg.devices.goxlr_game_sink.clone()
+        } else {
+            cfg.surround.target_sink.clone()
+        };
+        let mgr = Arc::clone(&self.surround);
+
+        if enabled {
+            self.tokio_handle.spawn(async move {
+                let mut m = mgr.lock().await;
+                let _ = m.restart(&surround_cfg, &target).await;
+            });
         }
         Ok(())
     }

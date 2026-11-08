@@ -10,8 +10,10 @@ pub mod coreaudio_routing;
 pub mod coreaudio_tap;
 pub mod pulse;
 pub mod routing_logic;
+pub mod surround;
 
 pub use pulse::PulseManager;
+pub use surround::SurroundManager;
 
 /// The audio backend for the current OS.
 #[cfg(target_os = "macos")]

@@ -255,10 +255,10 @@ async fn test_pulse_manager_loopback_and_routing_apis() {
     let resolved = PulseManager::resolve_effective_sink("dummy_virtual_dsp").await;
     assert_eq!(resolved, "dummy_virtual_dsp");
 
-    // Attempt loopback creation for non-existent source
+    // Attempt loopback creation for non-existent source (should fail without loading module)
     let loopback_res =
         PulseManager::ensure_loopback("dummy_source_123", "dummy_sink_123", 20).await;
-    let _ = loopback_res;
+    assert!(loopback_res.is_err());
 
     // Get sink name by index (non-existent)
     let sink_name = PulseManager::get_sink_name_by_index("999_999").await;

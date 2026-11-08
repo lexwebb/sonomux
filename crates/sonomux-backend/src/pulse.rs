@@ -184,6 +184,19 @@ impl PulseManager {
             }
         }
 
+        if !Self::source_exists(source).await {
+            return Err(BackendError::NotFound(format!(
+                "Source '{}' does not exist",
+                source
+            )));
+        }
+        if !Self::sink_exists(sink).await {
+            return Err(BackendError::NotFound(format!(
+                "Sink '{}' does not exist",
+                sink
+            )));
+        }
+
         info!(
             "Loading module-loopback source={} sink={} latency_msec={}...",
             source, sink, latency_ms
@@ -566,13 +579,20 @@ impl PulseManager {
         policies: &PoliciesConfig,
     ) -> Result<usize, BackendError> {
         let streams = Self::get_active_streams().await?;
-        let surround_available = Self::sink_exists(&policies.surround_in_node).await;
+        let native_surround_exists = Self::sink_exists("effect_input.sonomux-surround").await;
+        let mut effective_policies = policies.clone();
+        if native_surround_exists {
+            effective_policies.surround_in_node = "effect_input.sonomux-surround".to_string();
+            effective_policies.surround_out_node = "effect_output.sonomux-surround".to_string();
+        }
+        let surround_available =
+            native_surround_exists || Self::sink_exists(&policies.surround_in_node).await;
 
         let moves = Self::compute_routing_moves(
             &streams,
             routing_config,
             devices,
-            policies,
+            &effective_policies,
             surround_available,
         );
 
