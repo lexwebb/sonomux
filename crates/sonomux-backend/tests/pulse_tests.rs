@@ -450,6 +450,30 @@ fn test_compute_routing_moves_keep_off_surround_enforced() {
 }
 
 #[test]
+fn test_compute_routing_skips_all_filter_chain_outputs() {
+    let routing_config = sonomux_core::RoutingConfig::default();
+    let devices = sonomux_core::DevicesConfig::default();
+    // Native surround active: routing's surround_out_node no longer names the legacy chain.
+    let policies = sonomux_core::PoliciesConfig {
+        surround_out_node: "effect_output.sonomux-surround".to_string(),
+        ..Default::default()
+    };
+
+    // Legacy VSM output still present, parked on the game sink by the surround policy.
+    let mut legacy = sonomux_core::StreamInfo::new(229, 85);
+    legacy.node_name = Some("effect_output.virtual-surround-manager".to_string());
+    legacy.app_name = "Virtual Surround Manager".to_string();
+    legacy.sink_name = devices.goxlr_game_sink.clone();
+
+    let moves =
+        PulseManager::compute_routing_moves(&[legacy], &routing_config, &devices, &policies, true);
+    assert!(
+        moves.is_empty(),
+        "routing must not touch DSP outputs: {moves:?}"
+    );
+}
+
+#[test]
 fn test_compute_routing_disabled_skips_all() {
     let routing_config = sonomux_core::RoutingConfig {
         enabled: false, // Disabled

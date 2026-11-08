@@ -412,7 +412,9 @@ mod tests {
 
     #[test]
     fn test_custom_wav_resolution() {
-        let custom = "assets/hrir/atmos.wav";
+        // Anchor to the crate: unit tests run with the crate dir as cwd, so a bare
+        // "assets/hrir/atmos.wav" never exists and an installed profile would win.
+        let custom = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/hrir/atmos.wav");
         let resolved = resolve_hrir_path("ignored", Some(custom));
         assert_eq!(resolved, Some(PathBuf::from(custom)));
 

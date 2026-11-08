@@ -457,8 +457,12 @@ impl PulseManager {
 
         for stream in streams {
             let node_name = stream.node_name.as_deref().unwrap_or("");
-            // Skip loopbacks, virtual surround output internal stream, and speech-dispatcher internal dummy
+            // Skip loopbacks, filter-chain DSP outputs (native and legacy surround alike —
+            // their placement is owned by the surround policy, not app routing), and the
+            // speech-dispatcher internal dummy. Skipping only `surround_out_node` here let a
+            // second surround chain be fought over by routing and policy every tick.
             if node_name == policies.surround_out_node
+                || node_name.starts_with("effect_output.")
                 || node_name.starts_with("output.loopback")
                 || stream.app_name == "speech-dispatcher-dummy"
             {
