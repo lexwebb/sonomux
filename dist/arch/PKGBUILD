@@ -45,6 +45,10 @@ package() {
   # Install Desktop launcher
   install -Dm644 dist/desktop/org.sonomux.Sonomux.desktop "$pkgdir/usr/share/applications/org.sonomux.Sonomux.desktop"
 
+  # Install HRIR Spatial Profiles
+  install -d "$pkgdir/usr/share/sonomux/hrir"
+  install -m644 assets/hrir/* "$pkgdir/usr/share/sonomux/hrir/"
+
   # Install D-Bus auto-activation service
   install -Dm644 dist/dbus/org.sonomux.Daemon.service "$pkgdir/usr/share/dbus-1/services/org.sonomux.Daemon.service"
 

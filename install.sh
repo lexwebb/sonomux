@@ -82,8 +82,9 @@ BIN_DIR="${HOME}/.local/bin"
 SYSTEMD_DIR="${HOME}/.config/systemd/user"
 DBUS_DIR="${HOME}/.local/share/dbus-1/services"
 DESKTOP_DIR="${HOME}/.local/share/applications"
+HRIR_DIR="${HOME}/.local/share/sonomux/hrir"
 
-mkdir -p "${BIN_DIR}" "${SYSTEMD_DIR}" "${DBUS_DIR}" "${DESKTOP_DIR}"
+mkdir -p "${BIN_DIR}" "${SYSTEMD_DIR}" "${DBUS_DIR}" "${DESKTOP_DIR}" "${HRIR_DIR}"
 
 # 3. Stop running daemon if active
 if systemctl --user is-active --quiet sonomuxd.service 2>/dev/null; then
@@ -111,6 +112,10 @@ sed "s|/usr/bin/sonomuxd|${BIN_DIR}/sonomuxd|g" dist/dbus/org.sonomux.Daemon.ser
 # 7. Install Desktop Entry
 echo "🖥️ Installing desktop launcher..."
 install -m 644 dist/desktop/org.sonomux.Sonomux.desktop "${DESKTOP_DIR}/org.sonomux.Sonomux.desktop"
+
+# 8. Install HRIR Spatial Profiles
+echo "🎧 Installing HRIR spatial profiles..."
+install -m 644 assets/hrir/* "${HRIR_DIR}/"
 
 # 8. Omarchy Bar Integration (if Omarchy is present)
 if [ -d "${HOME}/.config/omarchy" ]; then

@@ -36,6 +36,7 @@ async fn shared_proxy_agrees_with_service_on_read_methods() {
         config: Arc::new(Mutex::new(AppConfig::default())),
         tokio_handle: tokio::runtime::Handle::current(),
         routing_kick: Arc::new(tokio::sync::Notify::new()),
+        surround: Arc::new(Mutex::new(sonomux_backend::SurroundManager::new())),
     };
 
     let (a, b) = std::os::unix::net::UnixStream::pair().unwrap();

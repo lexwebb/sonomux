@@ -127,6 +127,54 @@ async fn main() -> anyhow::Result<()> {
                 println!("✅ Audio stream policies enforced successfully.");
             }
         }
+        "surround" | "spatial" => {
+            let sub = args.get(1).map(|s| s.as_str()).unwrap_or("status");
+            match sub {
+                "on" | "enable" | "1" => {
+                    if let Err(e) = proxy.set_surround_enabled(true).await {
+                        eprintln!("Failed to enable 7.1 Virtual Surround: {}", e);
+                    } else {
+                        println!("🎧 7.1 Virtual Surround enabled.");
+                    }
+                }
+                "off" | "disable" | "0" => {
+                    if let Err(e) = proxy.set_surround_enabled(false).await {
+                        eprintln!("Failed to disable 7.1 Virtual Surround: {}", e);
+                    } else {
+                        println!("🎧 7.1 Virtual Surround disabled.");
+                    }
+                }
+                "profile" | "set-profile" => {
+                    if let Some(prof) = args.get(2) {
+                        if let Err(e) = proxy.set_surround_profile(prof.clone()).await {
+                            eprintln!("Failed to set surround profile to '{}': {}", prof, e);
+                        } else {
+                            println!("🎧 7.1 Virtual Surround profile set to '{}'.", prof);
+                        }
+                    } else {
+                        eprintln!("Usage: sonomuxctl surround profile <profile_name>");
+                    }
+                }
+                _ => match proxy.get_surround_info().await {
+                    Ok((enabled, current, available)) => {
+                        println!("🎧 Sonomux 7.1 Virtual Surround:");
+                        println!(
+                            "  State:     {}",
+                            if enabled {
+                                "● Enabled"
+                            } else {
+                                "○ Disabled"
+                            }
+                        );
+                        println!("  Profile:   {}", current);
+                        println!("  Available: {}", available.join(", "));
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to query surround info: {}", e);
+                    }
+                },
+            }
+        }
         "help" | "--help" | "-h" => {
             print_help();
         }
@@ -150,6 +198,7 @@ fn print_help() {
     );
     println!("  mute           Toggle mute on desk speakers (GoXLR headphone output)");
     println!("  volume <N>     Set desk speaker volume (0 to 100)");
-    println!("  enforce        Re-enforce Virtual Surround Manager and stream isolation policies");
+    println!("  surround       Control 7.1 Virtual Surround (status, on, off, profile <name>)");
+    println!("  enforce        Re-enforce audio routing and stream isolation policies");
     println!("  help           Show this help message");
 }

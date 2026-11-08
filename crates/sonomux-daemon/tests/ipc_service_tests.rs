@@ -69,6 +69,7 @@ impl Fixture {
             config: Arc::clone(&config),
             tokio_handle: tokio::runtime::Handle::current(),
             routing_kick: Arc::new(tokio::sync::Notify::new()),
+            surround: Arc::new(Mutex::new(sonomux_backend::SurroundManager::new())),
         };
         let (_server, client) = serve(svc).await;
         Self {

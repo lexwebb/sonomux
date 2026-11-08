@@ -255,10 +255,10 @@ async fn test_pulse_manager_loopback_and_routing_apis() {
     let resolved = PulseManager::resolve_effective_sink("dummy_virtual_dsp").await;
     assert_eq!(resolved, "dummy_virtual_dsp");
 
-    // Attempt loopback creation for non-existent source
+    // Attempt loopback creation for non-existent source (should fail without loading module)
     let loopback_res =
         PulseManager::ensure_loopback("dummy_source_123", "dummy_sink_123", 20).await;
-    let _ = loopback_res;
+    assert!(loopback_res.is_err());
 
     // Get sink name by index (non-existent)
     let sink_name = PulseManager::get_sink_name_by_index("999_999").await;
@@ -447,6 +447,30 @@ fn test_compute_routing_moves_keep_off_surround_enforced() {
     assert_eq!(moves.len(), 1);
     assert_eq!(moves[0].0, 99);
     assert_eq!(moves[0].1, devices.goxlr_system_sink); // Diverted to System!
+}
+
+#[test]
+fn test_compute_routing_skips_all_filter_chain_outputs() {
+    let routing_config = sonomux_core::RoutingConfig::default();
+    let devices = sonomux_core::DevicesConfig::default();
+    // Native surround active: routing's surround_out_node no longer names the legacy chain.
+    let policies = sonomux_core::PoliciesConfig {
+        surround_out_node: "effect_output.sonomux-surround".to_string(),
+        ..Default::default()
+    };
+
+    // Legacy VSM output still present, parked on the game sink by the surround policy.
+    let mut legacy = sonomux_core::StreamInfo::new(229, 85);
+    legacy.node_name = Some("effect_output.virtual-surround-manager".to_string());
+    legacy.app_name = "Virtual Surround Manager".to_string();
+    legacy.sink_name = devices.goxlr_game_sink.clone();
+
+    let moves =
+        PulseManager::compute_routing_moves(&[legacy], &routing_config, &devices, &policies, true);
+    assert!(
+        moves.is_empty(),
+        "routing must not touch DSP outputs: {moves:?}"
+    );
 }
 
 #[test]

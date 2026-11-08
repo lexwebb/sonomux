@@ -204,6 +204,11 @@ export component MainWindow inherits Window {
     // Rules
     in property <[RuleRow]> rules;
 
+    // Surround
+    in-out property <bool> surround-enabled: false;
+    in property <[string]> surround-profiles: [];
+    in property <int> surround-profile-index: 0;
+
     callback channel-volume-changed(string, float);
     callback channel-mute(string, bool);
     callback toggle-speakers();
@@ -215,6 +220,8 @@ export component MainWindow inherits Window {
     callback set-split-unpaired(bool);
     callback rule-enabled(string, bool);
     callback install-helper(int);
+    callback set-surround-enabled(bool);
+    callback set-surround-profile(string);
 
     function fader-label(f: string) -> string {
         f == "" ? "No fader" : "Fader " + f
@@ -507,6 +514,39 @@ export component MainWindow inherits Window {
                                     primary: true;
                                     clicked => { root.install-helper(h.index); }
                                 }
+                            }
+                        }
+                    }
+                }
+                GroupBox {
+                    title: "Spatial Audio (7.1 Virtual Surround)";
+                    vertical-stretch: 0;
+                    VerticalLayout {
+                        spacing: 12px;
+                        HorizontalLayout {
+                            spacing: 12px;
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                Label { text: "Enable 7.1 Virtual Surround"; font-weight: 600; }
+                                Hint { text: "Convolves 8-channel surround audio into binaural stereo directly for the Game channel."; }
+                            }
+                            Switch {
+                                checked: root.surround-enabled;
+                                toggled => { root.set-surround-enabled(self.checked); }
+                            }
+                        }
+                        if root.surround-enabled: HorizontalLayout {
+                            spacing: 12px;
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                Label { text: "Spatial Audio Profile"; font-weight: 600; }
+                                Hint { text: "HeSuVi impulse response curve applied to the 7.1 audio graph."; }
+                            }
+                            ComboBox {
+                                width: 200px;
+                                model: root.surround-profiles;
+                                current-index: root.surround-profile-index;
+                                selected(v) => { root.set-surround-profile(v); }
                             }
                         }
                     }

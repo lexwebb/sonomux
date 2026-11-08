@@ -36,6 +36,9 @@ fn test_default_config_values() {
         cfg.routing.category_targets.get("game"),
         Some(&"Surround".to_string())
     );
+    assert!(cfg.surround.enabled);
+    assert_eq!(cfg.surround.profile, "atmos");
+    assert_eq!(cfg.surround.sink_name, "effect_input.sonomux-surround");
 }
 
 #[test]

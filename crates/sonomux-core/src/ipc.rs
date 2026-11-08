@@ -72,4 +72,8 @@ pub trait SonomuxDaemon {
     ) -> zbus::Result<(Vec<(String, String, String, String)>, Vec<(String, String)>)>;
     async fn get_rules(&self) -> zbus::Result<Vec<(String, bool)>>;
     async fn set_rule_enabled(&self, rule_name: String, enabled: bool) -> zbus::Result<()>;
+    /// `(enabled, profile, available_profiles)`
+    async fn get_surround_info(&self) -> zbus::Result<(bool, String, Vec<String>)>;
+    async fn set_surround_enabled(&self, enabled: bool) -> zbus::Result<()>;
+    async fn set_surround_profile(&self, profile: String) -> zbus::Result<()>;
 }

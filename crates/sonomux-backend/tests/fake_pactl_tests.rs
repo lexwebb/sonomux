@@ -6,8 +6,8 @@ use std::sync::Once;
 
 const FAKE_PACTL: &str = r#"#!/bin/sh
 case "$*" in
-  "list sinks short") printf '1\tvirt_out\tPipeWire\n2\talsa_output.real_sink\tPipeWire\n' ;;
-  "list sources short") printf '42\tmix_src\tPipeWire\n50\tbad_src\tPipeWire\n' ;;
+  "list sinks short") printf '1\tvirt_out\tPipeWire\n2\talsa_output.real_sink\tPipeWire\n3\ts\tPipeWire\n' ;;
+  "list sources short") printf '42\tmix_src\tPipeWire\n50\tbad_src\tPipeWire\n51\tnew_src\tPipeWire\n' ;;
   "list modules short") printf '7\tmodule-loopback\tsource=mix_src sink=x\n8\tmodule-loopback\tsource=bad_src sink=x\n' ;;
   "-f json list source-outputs") echo '[{"owner_module": 7, "source": 42}]' ;;
   "-f json list sinks") echo '[{"index": 1, "name": "virt_out"}, {"index": 2, "name": "alsa_output.real_sink"}]' ;;

@@ -176,6 +176,9 @@ struct Slow {
     splits: Vec<(String, String, String)>,
     other: Vec<(String, String)>,
     rules: Vec<(String, bool)>,
+    surround_enabled: bool,
+    surround_profile: String,
+    surround_profiles: Vec<String>,
     /// (helper index, device, status, button label)
     helpers: Vec<(i32, String, String, String)>,
 }
@@ -272,6 +275,11 @@ async fn read_slow(
         s.other = other;
     }
     s.rules = p.get_rules().await.unwrap_or_default();
+    if let Ok((enabled, profile, profiles)) = p.get_surround_info().await {
+        s.surround_enabled = enabled;
+        s.surround_profile = profile;
+        s.surround_profiles = profiles;
+    }
     s
 }
 
@@ -301,6 +309,14 @@ fn apply_slow(ui: &MainWindow, s: &Slow, prev: Option<&Slow>) {
     ui.set_keep_defaults(s.keep_defaults);
     ui.set_split_unpaired(s.split_unpaired);
     ui.set_split_title(s.split_title.clone().into());
+    ui.set_surround_enabled(s.surround_enabled);
+    let prof_idx = s
+        .surround_profiles
+        .iter()
+        .position(|p| p == &s.surround_profile)
+        .unwrap_or(0) as i32;
+    ui.set_surround_profile_index(prof_idx);
+    ui.set_surround_profiles(strings(&s.surround_profiles));
 
     // Lists: only replace when their data changed.
     if prev.is_none_or(|p| p.apps != s.apps) {
@@ -737,6 +753,23 @@ async fn main() -> anyhow::Result<()> {
             let name = name.to_string();
             with_proxy(&proxy, &refresh, move |p| async move {
                 let _ = p.set_rule_enabled(name, on).await;
+            });
+        });
+    }
+    {
+        let (proxy, refresh) = (proxy.clone(), Arc::clone(&refresh));
+        ui.on_set_surround_enabled(move |on| {
+            with_proxy(&proxy, &refresh, move |p| async move {
+                let _ = p.set_surround_enabled(on).await;
+            });
+        });
+    }
+    {
+        let (proxy, refresh) = (proxy.clone(), Arc::clone(&refresh));
+        ui.on_set_surround_profile(move |prof| {
+            let prof = prof.to_string();
+            with_proxy(&proxy, &refresh, move |p| async move {
+                let _ = p.set_surround_profile(prof).await;
             });
         });
     }
