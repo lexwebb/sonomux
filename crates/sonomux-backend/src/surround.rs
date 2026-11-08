@@ -9,7 +9,9 @@
 use crate::BackendError;
 use sonomux_core::config::SurroundConfig;
 use std::path::{Path, PathBuf};
-use tracing::{debug, info, warn};
+#[cfg(not(target_os = "macos"))]
+use tracing::info;
+use tracing::{debug, warn};
 
 /// Standard directory locations searched for HeSuVi HRIR impulse response WAV files.
 pub fn hrir_search_directories() -> Vec<PathBuf> {
@@ -28,7 +30,12 @@ pub fn hrir_search_directories() -> Vec<PathBuf> {
     }
 
     dirs.push(PathBuf::from("/usr/share/sonomux/hrir"));
-    dirs.push(PathBuf::from("assets/hrir"));
+    // The profiles bundled in the source tree, anchored at build time: a cwd-relative
+    // "assets/hrir" only resolved when run from the repo root (never under `cargo test`).
+    dirs.push(PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../assets/hrir"
+    )));
     dirs.push(PathBuf::from(
         "/usr/share/virtual-surround-manager/hrir_wav",
     ));
@@ -199,6 +206,7 @@ context.modules = [
 /// Manages the runtime lifecycle of the PipeWire virtual surround filter-chain process.
 pub struct SurroundManager {
     child: Option<tokio::process::Child>,
+    #[cfg_attr(target_os = "macos", allow(dead_code))] // only the PipeWire path writes it
     config_path: PathBuf,
 }
 
