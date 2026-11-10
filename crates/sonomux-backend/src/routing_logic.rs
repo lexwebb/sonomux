@@ -91,6 +91,38 @@ pub fn route_dead(playing: bool, frames_before: u64, frames_now: u64) -> bool {
     playing && frames_now <= frames_before
 }
 
+/// Watches one route for the dead-tap failure: after a long idle (USB suspend, sleep) a tap
+/// can deliver pure digital silence while its IOProc, frame count and every HAL property look
+/// healthy. Only rebuilding the tap and aggregate fixes it. Apps that hold output open while
+/// silent (chat apps) trip this too, so rebuilds for silence are spaced out.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Silence {
+    since: Option<Instant>,
+    rebuilt: Option<Instant>,
+}
+
+impl Silence {
+    /// Silence while playing for this long means the tap is dead.
+    pub const AFTER: Duration = Duration::from_secs(15);
+    /// Minimum time between rebuilds for silence.
+    pub const EVERY: Duration = Duration::from_secs(300);
+
+    /// Record one tick (`peak` = loudest tapped sample since the last tick). Returns true when
+    /// the route should be rebuilt now.
+    pub fn tick(&mut self, playing: bool, peak: f32, now: Instant) -> bool {
+        if !playing || peak > 0.0 {
+            self.since = None;
+            return false;
+        }
+        let since = *self.since.get_or_insert(now);
+        let due = now - since >= Self::AFTER && self.rebuilt.is_none_or(|t| now - t >= Self::EVERY);
+        if due {
+            self.rebuilt = Some(now);
+        }
+        due
+    }
+}
+
 /// Retry pacing for one route key that keeps failing (start errors, or dead right after start).
 /// Waits 1 s, 2 s, 4 s ... up to 60 s between attempts.
 #[derive(Debug, Clone, Default)]
@@ -203,6 +235,30 @@ mod tests {
         }
         assert!(!b.ready(t0 + Duration::from_secs(59)));
         assert!(b.ready(t0 + Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn silence_rebuilds_after_a_while_then_spaced_out() {
+        let t = Instant::now();
+        let s = Duration::from_secs;
+        let mut w = Silence::default();
+        assert!(!w.tick(true, 0.0, t));
+        assert!(!w.tick(true, 0.0, t + s(10)));
+        assert!(w.tick(true, 0.0, t + s(15))); // dead tap: rebuild
+        assert!(!w.tick(true, 0.0, t + s(60))); // still silent, but too soon again
+        assert!(w.tick(true, 0.0, t + s(15) + Silence::EVERY));
+    }
+
+    #[test]
+    fn silence_resets_on_sound_or_pause() {
+        let t = Instant::now();
+        let s = Duration::from_secs;
+        let mut w = Silence::default();
+        w.tick(true, 0.0, t);
+        assert!(!w.tick(true, 0.2, t + s(14))); // sound: alive
+        assert!(!w.tick(true, 0.0, t + s(20))); // silence restarts the clock
+        assert!(!w.tick(false, 0.0, t + s(40))); // paused: not a dead tap
+        assert!(!w.tick(true, 0.0, t + s(41)));
     }
 
     #[test]
