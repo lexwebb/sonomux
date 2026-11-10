@@ -180,6 +180,28 @@ impl GoXLRClient {
         Ok(())
     }
 
+    /// Turn off GoXLR Utility's own macOS aggregate devices: Sonomux makes the per-channel
+    /// devices, and two sets of look-alike devices confuse apps. Returns true when it was on.
+    pub async fn disable_macos_aggregates(&self) -> Result<bool, DeviceError> {
+        let status: Value = serde_json::from_str(
+            &self.request(&serde_json::json!("GetStatus")).await?,
+        )
+        .map_err(|e| DeviceError::Internal(format!("Failed to parse status JSON: {}", e)))?;
+        let on = status
+            .pointer("/Status/config/handle_macos_aggregates")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if !on {
+            return Ok(false);
+        }
+        let req = serde_json::json!({ "Daemon": { "HandleMacOSAggregates": false } });
+        let resp = self.request(&req).await?;
+        if resp.contains("\"Error\"") {
+            return Err(DeviceError::Internal(resp));
+        }
+        Ok(true)
+    }
+
     /// Set volume for a channel (0-255 scale).
     pub async fn set_volume_raw(&self, channel: Channel, volume: u8) -> Result<(), DeviceError> {
         debug!("Setting GoXLR volume {} -> {}", channel.as_str(), volume);

@@ -245,6 +245,13 @@ async fn main() -> anyhow::Result<()> {
                 }
 
                 if goxlr_up {
+                    // Sonomux makes the GoXLR channel devices on macOS; keep the Utility's off.
+                    #[cfg(target_os = "macos")]
+                    match goxlr.disable_macos_aggregates().await {
+                        Ok(true) => info!("Turned off GoXLR Utility's macOS aggregate devices"),
+                        Ok(false) => {}
+                        Err(e) => debug!("GoXLR aggregate setting check failed: {}", e),
+                    }
                     if !goxlr_was_up {
                         // The sampler mix only feeds the headset loopback, which macOS lacks so far.
                         #[cfg(not(target_os = "macos"))]

@@ -358,3 +358,59 @@ async fn test_get_all_volumes_is_one_request_after_first() {
     server_task.abort();
     let _ = std::fs::remove_file(&socket_path);
 }
+
+/// Mock Utility reporting `handle_macos_aggregates = on`; returns every request it saw.
+async fn aggregates_case(on: bool) -> (bool, Vec<String>) {
+    let socket_path = std::env::temp_dir().join(format!(
+        "mock-goxlr-agg-{}-{}.socket",
+        on,
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&socket_path);
+    let listener = UnixListener::bind(&socket_path).expect("Failed to bind mock socket");
+    let seen = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let log = Arc::clone(&seen);
+
+    let server_task = tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let mut len_buf = [0u8; 4];
+            stream.read_exact(&mut len_buf).await.unwrap();
+            let mut req_buf = vec![0u8; u32::from_be_bytes(len_buf) as usize];
+            stream.read_exact(&mut req_buf).await.unwrap();
+            let req = String::from_utf8(req_buf).unwrap();
+            let resp = if req.contains("GetStatus") {
+                json!({ "Status": { "mixers": {}, "config": { "handle_macos_aggregates": on } } })
+            } else {
+                json!("Ok")
+            };
+            log.lock().await.push(req);
+            let bytes = serde_json::to_vec(&resp).unwrap();
+            stream
+                .write_all(&(bytes.len() as u32).to_be_bytes())
+                .await
+                .unwrap();
+            stream.write_all(&bytes).await.unwrap();
+        }
+    });
+
+    let changed = GoXLRClient::new(&socket_path)
+        .disable_macos_aggregates()
+        .await
+        .expect("aggregate check");
+    server_task.abort();
+    let _ = std::fs::remove_file(&socket_path);
+    let requests = seen.lock().await.clone();
+    (changed, requests)
+}
+
+#[tokio::test]
+async fn disables_utility_aggregates_only_when_on() {
+    let (changed, reqs) = aggregates_case(true).await;
+    assert!(changed);
+    assert_eq!(reqs.len(), 2);
+    assert_eq!(reqs[1], r#"{"Daemon":{"HandleMacOSAggregates":false}}"#);
+
+    let (changed, reqs) = aggregates_case(false).await;
+    assert!(!changed);
+    assert_eq!(reqs, [r#""GetStatus""#]);
+}
