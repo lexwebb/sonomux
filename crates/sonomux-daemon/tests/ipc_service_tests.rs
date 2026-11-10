@@ -24,6 +24,9 @@ trait Daemon {
     async fn get_routing_config(&self) -> zbus::Result<(bool, HashMap<String, String>)>;
     async fn set_app_override(&self, id: &str, target: &str) -> zbus::Result<()>;
     async fn set_split_unpaired(&self, enabled: bool) -> zbus::Result<()>;
+    async fn get_surround_info(&self) -> zbus::Result<(bool, String, Vec<String>)>;
+    async fn set_surround_enabled(&self, enabled: bool) -> zbus::Result<()>;
+    async fn set_surround_profile(&self, profile: &str) -> zbus::Result<()>;
 }
 
 /// Serve `svc` over an in-process socket pair; returns (server, client) connections.
@@ -61,6 +64,8 @@ impl Fixture {
         let mock = mock_goxlr(&format!("ipc-{tag}")).await;
         let mut cfg = AppConfig::default();
         cfg.routing.enabled = false;
+        // Off, so no handler starts a real PipeWire filter chain on Linux.
+        cfg.surround.enabled = false;
         let config = Arc::new(Mutex::new(cfg));
         let state = shared_state();
         let svc = SonomuxDbusService {
@@ -199,4 +204,37 @@ async fn set_split_unpaired_reports_save_failure() {
         "unexpected error: {err}"
     );
     let _ = std::fs::remove_file(&f.config_home);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn get_surround_info_reports_config_and_profiles() {
+    let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let f = Fixture::new("surround-info").await;
+    let (enabled, profile, profiles) = f.proxy().await.get_surround_info().await.unwrap();
+    assert!(!enabled);
+    assert_eq!(profile, "atmos");
+    assert_eq!(
+        profiles,
+        sonomux_backend::surround::list_available_profiles()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn set_surround_enabled_off_updates_and_saves() {
+    let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let f = Fixture::new("surround-off").await;
+    f.config.lock().await.surround.enabled = true;
+    // Turning it off only stops the (never started) chain, so this is safe everywhere.
+    f.proxy().await.set_surround_enabled(false).await.unwrap();
+    assert!(!f.config.lock().await.surround.enabled);
+    assert!(f.saved_config().contains("[surround]"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn set_surround_profile_updates_and_saves() {
+    let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let f = Fixture::new("surround-profile").await;
+    f.proxy().await.set_surround_profile("dtshx").await.unwrap();
+    assert_eq!(f.config.lock().await.surround.profile, "dtshx");
+    assert!(f.saved_config().contains("profile = \"dtshx\""));
 }
