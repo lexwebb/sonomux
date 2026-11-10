@@ -9,7 +9,7 @@ use crate::coreaudio::{CoreAudioManager, Device};
 use crate::coreaudio_channels::resolve_output;
 use crate::coreaudio_tap::AppRoute;
 use crate::routing_logic::DeviceIds;
-use crate::routing_logic::{any_playing, keep_route, route_dead, Backoff};
+use crate::routing_logic::{any_playing, keep_route, route_dead, Backoff, Silence};
 pub use crate::routing_logic::{plan, target_sink, RouteKey};
 use sonomux_core::{DevicesConfig, RoutingConfig};
 use std::collections::HashMap;
@@ -34,6 +34,11 @@ fn routes() -> &'static Mutex<Live> {
 fn backoffs() -> &'static Mutex<HashMap<RouteKey, Backoff>> {
     static BACKOFFS: OnceLock<Mutex<HashMap<RouteKey, Backoff>>> = OnceLock::new();
     BACKOFFS.get_or_init(Default::default)
+}
+
+fn silences() -> &'static Mutex<HashMap<RouteKey, Silence>> {
+    static SILENCES: OnceLock<Mutex<HashMap<RouteKey, Silence>>> = OnceLock::new();
+    SILENCES.get_or_init(Default::default)
 }
 
 /// Hardware UID and first output channel (0-based) that a device plays to: a split device
@@ -79,20 +84,34 @@ pub fn sync(routing: &RoutingConfig, devices: &DevicesConfig) -> usize {
     let now = std::time::Instant::now();
     let mut live = routes().lock().unwrap();
     let mut backoff = backoffs().lock().unwrap();
+    let mut silence = silences().lock().unwrap();
     backoff.retain(|k, _| desired.contains_key(k));
+    silence.retain(|k, _| desired.contains_key(k));
     live.retain(|key, (procs, ids, frames, route)| {
-        let now_frames = route.frames();
+        let (now_frames, peak) = route.stats();
         let playing = any_playing(&streams, procs);
         let dead = route_dead(playing, *frames, now_frames);
-        let keep = keep_route(
-            desired.get(key),
-            procs,
-            *ids,
-            device_ids(key, &all),
-            playing,
-            *frames,
-            now_frames,
-        );
+        let silent = silence
+            .entry(key.clone())
+            .or_default()
+            .tick(playing, peak, now);
+        if silent {
+            info!(
+                "Route {:?} silent for {} s while playing: rebuilding",
+                key,
+                Silence::AFTER.as_secs()
+            );
+        }
+        let keep = !silent
+            && keep_route(
+                desired.get(key),
+                procs,
+                *ids,
+                device_ids(key, &all),
+                playing,
+                *frames,
+                now_frames,
+            );
         if !keep && dead {
             backoff.entry(key.clone()).or_default().fail(now);
         } else if keep && playing && now_frames > *frames {
