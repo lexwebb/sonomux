@@ -69,11 +69,12 @@ pub fn any_playing(streams: &[StreamInfo], procs: &[u32]) -> bool {
         .any(|s| !s.is_corked && procs.contains(&(s.index as u32)))
 }
 
-/// Whether a live route should stay this tick. It stays only if the plan still wants exactly
-/// these processes on it, its hardware still has the object IDs it was built on (a device
-/// back from sleep or a replug gets new IDs), and it is alive. A tap only counts frames while
-/// its apps play, so a route whose apps play but whose frame count has not moved is dead.
-pub fn keep_route(
+/// Why a live route must go this tick, or `None` to keep it. It stays only if the plan still
+/// wants exactly these processes on it, its hardware still has the object IDs it was built on
+/// (a device back from sleep or a replug gets new IDs), and it is alive. A tap only counts
+/// frames while its apps play, so a route whose apps play but whose frame count has not moved
+/// is dead.
+pub fn drop_reason(
     desired: Option<&Vec<u32>>,
     procs: &[u32],
     built_on: DeviceIds,
@@ -81,9 +82,14 @@ pub fn keep_route(
     playing: bool,
     frames_before: u64,
     frames_now: u64,
-) -> bool {
-    let alive = !route_dead(playing, frames_before, frames_now);
-    desired.is_some_and(|d| d.as_slice() == procs) && built_on == ids_now && alive
+) -> Option<&'static str> {
+    match desired {
+        None => Some("no longer wanted"),
+        Some(d) if d.as_slice() != procs => Some("process set changed"),
+        _ if built_on != ids_now => Some("device IDs changed"),
+        _ if route_dead(playing, frames_before, frames_now) => Some("frames stalled while playing"),
+        _ => None,
+    }
 }
 
 /// A route whose apps play but whose tap has not counted a frame since the last tick.
@@ -134,6 +140,14 @@ pub struct Backoff {
 impl Backoff {
     /// Longest wait between attempts.
     pub const MAX: Duration = Duration::from_secs(60);
+    /// A route dropped sooner than this after it was built counts as a failure, whatever the
+    /// reason: every rebuild restarts the hardware's IO, so a flapping route silences it.
+    pub const STABLE: Duration = Duration::from_secs(30);
+
+    /// Was a route built at `built` dropped too soon to count as healthy?
+    pub fn too_soon(built: Instant, now: Instant) -> bool {
+        now.saturating_duration_since(built) < Self::STABLE
+    }
 
     /// May we try this route again at `now`?
     pub fn ready(&self, now: Instant) -> bool {
@@ -262,6 +276,31 @@ mod tests {
     }
 
     #[test]
+    fn drop_reason_names_each_cause() {
+        let procs = vec![1, 2];
+        let more = vec![1, 2, 3];
+        let r = |d, ids, playing, now| drop_reason(Some(d), &procs, IDS, ids, playing, 5, now);
+        assert_eq!(r(&more, IDS, false, 5), Some("process set changed"));
+        assert_eq!(
+            r(&procs, (Some(11), Some(20)), false, 5),
+            Some("device IDs changed")
+        );
+        assert_eq!(
+            r(&procs, IDS, true, 5),
+            Some("frames stalled while playing")
+        );
+        assert_eq!(r(&procs, IDS, true, 6), None);
+    }
+
+    #[test]
+    fn rebuild_inside_stable_window_is_too_soon() {
+        let t = Instant::now();
+        assert!(Backoff::too_soon(t, t));
+        assert!(Backoff::too_soon(t, t + Duration::from_secs(29)));
+        assert!(!Backoff::too_soon(t, t + Backoff::STABLE));
+    }
+
+    #[test]
     fn route_dead_cases() {
         assert!(route_dead(true, 5, 5));
         assert!(!route_dead(true, 5, 6));
@@ -361,47 +400,59 @@ mod tests {
     #[test]
     fn keeps_unchanged_idle_route() {
         let procs = vec![1, 2];
-        assert!(keep_route(Some(&procs), &procs, IDS, IDS, false, 5, 5));
+        assert_eq!(
+            drop_reason(Some(&procs), &procs, IDS, IDS, false, 5, 5),
+            None
+        );
     }
 
     #[test]
     fn drops_when_process_set_changes() {
         let procs = vec![1, 2];
         let desired = vec![1, 2, 3];
-        assert!(!keep_route(Some(&desired), &procs, IDS, IDS, false, 5, 5));
+        assert!(drop_reason(Some(&desired), &procs, IDS, IDS, false, 5, 5).is_some());
     }
 
     #[test]
     fn drops_when_not_desired() {
         let procs = vec![1, 2];
-        assert!(!keep_route(None, &procs, IDS, IDS, false, 5, 5));
+        assert_eq!(
+            drop_reason(None, &procs, IDS, IDS, false, 5, 5),
+            Some("no longer wanted")
+        );
     }
 
     #[test]
     fn drops_when_device_id_changes() {
         let procs = vec![1, 2];
         let new_id = (Some(11), Some(20));
-        assert!(!keep_route(Some(&procs), &procs, IDS, new_id, false, 5, 5));
+        assert!(drop_reason(Some(&procs), &procs, IDS, new_id, false, 5, 5).is_some());
         let gone = (None, Some(20));
-        assert!(!keep_route(Some(&procs), &procs, IDS, gone, false, 5, 5));
+        assert!(drop_reason(Some(&procs), &procs, IDS, gone, false, 5, 5).is_some());
     }
 
     #[test]
     fn drops_playing_route_whose_frames_stalled() {
         let procs = vec![1, 2];
-        assert!(!keep_route(Some(&procs), &procs, IDS, IDS, true, 100, 100));
+        assert!(drop_reason(Some(&procs), &procs, IDS, IDS, true, 100, 100).is_some());
     }
 
     #[test]
     fn keeps_playing_route_with_advancing_frames() {
         let procs = vec![1, 2];
-        assert!(keep_route(Some(&procs), &procs, IDS, IDS, true, 100, 612));
+        assert_eq!(
+            drop_reason(Some(&procs), &procs, IDS, IDS, true, 100, 612),
+            None
+        );
     }
 
     #[test]
     fn keeps_idle_route_with_stalled_frames() {
         let procs = vec![1, 2];
-        assert!(keep_route(Some(&procs), &procs, IDS, IDS, false, 100, 100));
+        assert_eq!(
+            drop_reason(Some(&procs), &procs, IDS, IDS, false, 100, 100),
+            None
+        );
     }
 
     #[test]

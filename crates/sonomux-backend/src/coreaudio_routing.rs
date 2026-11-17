@@ -9,16 +9,17 @@ use crate::coreaudio::{CoreAudioManager, Device};
 use crate::coreaudio_channels::resolve_output;
 use crate::coreaudio_tap::AppRoute;
 use crate::routing_logic::DeviceIds;
-use crate::routing_logic::{any_playing, keep_route, route_dead, Backoff, Silence};
+use crate::routing_logic::{any_playing, drop_reason, route_dead, Backoff, Silence};
 pub use crate::routing_logic::{plan, target_sink, RouteKey};
 use sonomux_core::{DevicesConfig, RoutingConfig};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 use tracing::{debug, info, warn};
 
 /// Live routes: the processes each tap covers, the device IDs it was built on, frames seen at
-/// the last tick, and the tap.
-type Live = HashMap<RouteKey, (Vec<u32>, DeviceIds, u64, AppRoute)>;
+/// the last tick, when it was built, and the tap.
+type Live = HashMap<RouteKey, (Vec<u32>, DeviceIds, u64, Instant, AppRoute)>;
 
 fn device_ids(key: &RouteKey, all: &[Device]) -> DeviceIds {
     let id = |uid: &str| all.iter().find(|d| d.uid == uid).map(|d| d.id);
@@ -81,29 +82,23 @@ pub fn sync(routing: &RoutingConfig, devices: &DevicesConfig) -> usize {
         },
     );
 
-    let now = std::time::Instant::now();
+    let now = Instant::now();
     let mut live = routes().lock().unwrap();
     let mut backoff = backoffs().lock().unwrap();
     let mut silence = silences().lock().unwrap();
     backoff.retain(|k, _| desired.contains_key(k));
     silence.retain(|k, _| desired.contains_key(k));
-    live.retain(|key, (procs, ids, frames, route)| {
+    live.retain(|key, (procs, ids, frames, built, route)| {
         let (now_frames, peak) = route.stats();
         let playing = any_playing(&streams, procs);
-        let dead = route_dead(playing, *frames, now_frames);
         let silent = silence
             .entry(key.clone())
             .or_default()
             .tick(playing, peak, now);
-        if silent {
-            info!(
-                "Route {:?} silent for {} s while playing: rebuilding",
-                key,
-                Silence::AFTER.as_secs()
-            );
-        }
-        let keep = !silent
-            && keep_route(
+        let reason = if silent {
+            Some("silent while playing")
+        } else {
+            drop_reason(
                 desired.get(key),
                 procs,
                 *ids,
@@ -111,17 +106,35 @@ pub fn sync(routing: &RoutingConfig, devices: &DevicesConfig) -> usize {
                 playing,
                 *frames,
                 now_frames,
-            );
-        if !keep && dead {
-            backoff.entry(key.clone()).or_default().fail(now);
-        } else if keep && playing && now_frames > *frames {
-            backoff.remove(key);
-        }
+            )
+        };
+        let dead = route_dead(playing, *frames, now_frames);
         *frames = now_frames;
-        if !keep {
-            debug!("Dropping route {:?}", key);
-        }
-        keep
+        let Some(reason) = reason else {
+            // Only age proves health: a route can carry sound and still flap every few seconds.
+            if !Backoff::too_soon(*built, now) {
+                backoff.remove(key);
+            }
+            return true;
+        };
+        // Any rebuild restarts the hardware's IO; one that comes too soon is flapping, so it
+        // waits with backoff instead of silencing the device several times a second.
+        let flapping = dead || Backoff::too_soon(*built, now);
+        let retry = if flapping && desired.contains_key(key) {
+            let b = backoff.entry(key.clone()).or_default();
+            b.fail(now);
+            format!(" (retry after backoff, {} in a row)", b.failures())
+        } else {
+            String::new()
+        };
+        info!(
+            "Dropping route {:?} after {} s: {}{}",
+            key,
+            now.saturating_duration_since(*built).as_secs(),
+            reason,
+            retry
+        );
+        false
     });
     for (key, procs) in desired {
         if live.contains_key(&key) {
@@ -146,7 +159,7 @@ pub fn sync(routing: &RoutingConfig, devices: &DevicesConfig) -> usize {
                     first + 2
                 );
                 let ids = device_ids(&key, &all);
-                live.insert(key, (procs, ids, 0, route));
+                live.insert(key, (procs, ids, 0, now, route));
             }
             Err(e) => {
                 if backoff.entry(key.clone()).or_default().fail(now) {
