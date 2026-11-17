@@ -24,7 +24,8 @@ How to read it:
 | Signal | Meaning |
 |---|---|
 | No `Routing` line since a `GoXLR disconnected` or a wake | Route died with its hardware and wasn't rebuilt |
-| Several `Routing` lines a minute for one group | Route flapping: a liveness check misfires |
+| Several `Routing` lines a minute for one group | Route flapping: a liveness check misfires. The `Dropping route … : <reason>` line before each one names the trigger |
+| `aud:sonomuxd` toggling every ~40 ms, or coreaudiod `IOWorkLoopInit`/`Deinit` on the GoXLR several times a second | Hardware IO restarting in a loop: **no sound from any app**. Usually a flapping route (each rebuild restarts the device's IO) |
 | `Default … set` repeating | Daemon fighting an app over the default device |
 | `Audio IO Overload` bursts | Dropouts: this is what "garbled/distorted" sounds like |
 | `mic:sonomuxd` in indicator changes | Our routes are opening a microphone (they must not) |
@@ -37,7 +38,10 @@ How to read it:
 - A tap's IOProc only counts frames while a tapped app is producing sound. Idle apps show
   0 frames: that is normal, not a dead route.
 - A route is rebuilt when: its process set changes, its hardware's object ID changes
-  (replug/wake), or its apps are playing but its frame counter stopped.
+  (replug/wake), or its apps are playing but its frame counter stopped. Each drop logs
+  `Dropping route <key> after <n> s: <reason>` at info.
+- A route dropped within 30 s of being built (`Backoff::STABLE`) counts as flapping and
+  waits 1 s, 2 s, 4 s … up to 60 s before it is rebuilt.
 - Route aggregates must only use the tap's input stream (`tap_input_only`). If the
   orange mic dot shows for sonomuxd, that guard is broken.
 - macOS has no surround stage: "Surround" routes to the Game channel.
@@ -93,13 +97,26 @@ Keep `sonomuxd.good` until the fix is merged: it is the rollback.
   a binary macOS has cached gives `last exit reason = OS_REASON_CODESIGNING` and launchd
   won't start it (`Bootstrap failed: 5`).
 - **coreaudiod can wedge.** Symptom: no routes after start, and `sample` shows the daemon
-  in `mach_msg` under `HALC_ProxyObject::SetPropertyData` (e.g. from `AudioDeviceCreateIOProcID`).
+  in `mach_msg` under `HALC_ProxyObject::SetPropertyData` (e.g. from `AudioDeviceCreateIOProcID`),
+  or any new audio client (even a one-shot probe) hangs in `HALC_ProxySystem::HALC_ProxySystem`.
   That is coreaudiod, not our code: check with the known-good binary before blaming the
   change. Restart needs admin, and `! sudo` has no terminal for the password, so use:
-  `osascript -e 'do shell script "killall coreaudiod" with administrator privileges'`
+  `osascript -e "do shell script \"kill -9 $(pgrep -x coreaudiod)\" with administrator privileges"`
   (the user types the password in a dialog; all audio drops for ~2 s). Ask first.
-- Killing the daemon (or coreaudiod) while it creates a tap can leave coreaudiod wedged.
-  Prefer `launchctl bootout` over `pkill -9`.
+  - **`killall coreaudiod` can exit 0 and do nothing**, and `launchctl kickstart -k` is
+    blocked by SIP. Use `kill -9 <pid>` and confirm the restart: the PID and
+    `ps -o lstart= -p $(pgrep -x coreaudiod)` must change.
+  - The daemon rebuilds its routes by itself within ~10 s of a coreaudiod restart; don't
+    restart the daemon too.
+- **Restarting the daemon while it builds routes wedges coreaudiod.** `launchctl bootout`
+  mid-tap-creation did it (2026-11-17), so silence turned total. To recover from no sound,
+  restart coreaudiod only. Never restart both "to be sure".
+- `launchctl bootout` returns before the job is gone, so an immediate `bootstrap` fails with
+  `Bootstrap failed: 5` even though launchd restarts it moments later. Check
+  `launchctl print` for a new `pid` before retrying.
+- Prefer `launchctl bootout` over `pkill -9` for the daemon.
+- A probe that touches the HAL (`procs`, a Swift script) blocks forever if coreaudiod is
+  wedged. Run it with `timeout 10` so a hang is itself the evidence.
 - In zsh, `log` is a shell builtin: call `/usr/bin/log show`, or you get "too many
   arguments" (and silently empty output if stderr is hidden).
 - An `AVAudioEngine` voice-processing test run from the CLI fails with `-10875` even on
