@@ -534,7 +534,13 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    // Fast poll: volumes and status (the daemon reads the GoXLR every 50 ms).
+    // Fast poll: status always, volumes only while the Mixer page shows them. Reading volumes
+    // is what makes the daemon poll the GoXLR fast, so other pages leave it at its idle rate.
+    let mixer_open = Arc::new(std::sync::atomic::AtomicBool::new(ui.get_page() == 0));
+    {
+        let mixer_open = Arc::clone(&mixer_open);
+        ui.on_page_changed(move |p| mixer_open.store(p == 0, std::sync::atomic::Ordering::Relaxed));
+    }
     {
         let (weak, proxy, goxlr, touched) = (
             ui.as_weak(),
@@ -546,11 +552,16 @@ async fn main() -> anyhow::Result<()> {
             let mut tick = tokio::time::interval(Duration::from_millis(100));
             loop {
                 tick.tick().await;
+                let mixer = mixer_open.load(std::sync::atomic::Ordering::Relaxed);
                 let mut status = None;
                 let vols: Option<HashMap<String, f64>> = match proxy {
                     Some(ref p) => {
                         status = p.get_status().await.ok();
-                        p.get_channel_volumes().await.ok()
+                        if mixer {
+                            p.get_channel_volumes().await.ok()
+                        } else {
+                            None
+                        }
                     }
                     None => goxlr.get_all_volumes().await.ok().map(|m| {
                         m.into_iter()

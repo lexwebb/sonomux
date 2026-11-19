@@ -153,5 +153,6 @@ pub fn shared_state() -> Arc<tokio::sync::Mutex<SharedDaemonState>> {
         music_volume: 70.0,
         mic_volume: 100.0,
         loopback_active: false,
+        volumes_read_at: None,
     }))
 }
