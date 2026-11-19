@@ -26,6 +26,7 @@ How to read it:
 | No `Routing` line since a `GoXLR disconnected` or a wake | Route died with its hardware and wasn't rebuilt |
 | Several `Routing` lines a minute for one group | Route flapping: a liveness check misfires. The `Dropping route … : <reason>` line before each one names the trigger |
 | `aud:sonomuxd` toggling every ~40 ms, or coreaudiod `IOWorkLoopInit`/`Deinit` on the GoXLR several times a second | Hardware IO restarting in a loop: **no sound from any app**. Usually a flapping route (each rebuild restarts the device's IO) |
+| `GoXLR disconnected or suspended` every 10–60 s, each followed by `Routing` lines a tick later, with no kernel USB events | Presence check blipping: every blip releases all routes, apps fall back to the System fader, and **volumes jump**. `GoXLR check failed (<which>)` names the failing check. A real USB drop shows in `log show --predicate 'process == "kernel"'` |
 | `Default … set` repeating | Daemon fighting an app over the default device |
 | `Audio IO Overload` bursts | Dropouts: this is what "garbled/distorted" sounds like |
 | `mic:sonomuxd` in indicator changes | Our routes are opening a microphone (they must not) |
