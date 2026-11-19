@@ -53,6 +53,7 @@ async fn main() -> anyhow::Result<()> {
         mic_volume: 100.0,
         loopback_active: false,
         volumes_read_at: None,
+        utility_last_ok: None,
     }));
 
     let config_shared = Arc::new(Mutex::new(config.clone()));
@@ -123,8 +124,6 @@ async fn main() -> anyhow::Result<()> {
     let mut device_was_up = false;
     let mut utility_was_ok = false;
     let mut goxlr_presence = Presence::default();
-    // Last successful GoXLR Utility reply. The fader poll is the only thing that asks for it.
-    let mut utility_last_ok: Option<std::time::Instant> = None;
     #[cfg(target_os = "macos")]
     let mut aggregates_checked: Option<std::time::Instant> = None;
     let mut current_loopback_id: Option<u32> = None;
@@ -144,8 +143,43 @@ async fn main() -> anyhow::Result<()> {
             .check_interval_ms
             .max(sonomux_core::config::MIN_CHECK_INTERVAL_MS),
     ));
-    // Next GoXLR poll. Spaced from the end of the last one, so a slow reply never stacks polls.
-    let mut next_fader_poll = tokio::time::Instant::now();
+    // A tick held up by a slow await must not fire its missed ticks back to back: routes judge
+    // a tap dead when its frame count has not moved since the last tick, and ticks a few
+    // milliseconds apart made live taps look dead.
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+    // GoXLR poll in its own task, so a slow GoXLR Utility (replies have taken 1-4 s) never holds
+    // up the routing tick. Fast while the GUI's Mixer page reads volumes, slow otherwise. Its
+    // replies are also how the tick knows the Utility is up.
+    {
+        let goxlr = goxlr.clone();
+        let state = Arc::clone(&shared_state);
+        tokio::spawn(async move {
+            loop {
+                let read_at = state.lock().await.volumes_read_at;
+                let wait = fader_poll_interval(read_at, std::time::Instant::now());
+                if let Ok(vols) = goxlr.get_all_volumes().await {
+                    let pct = |c: &str| vols.get(c).map(|&v| (v as f64 / 255.0) * 100.0);
+                    let mut guard = state.lock().await;
+                    let s = &mut *guard;
+                    s.utility_last_ok = Some(std::time::Instant::now());
+                    for (c, slot) in [
+                        ("Headphones", &mut s.speaker_volume),
+                        ("System", &mut s.system_volume),
+                        ("Game", &mut s.game_volume),
+                        ("Chat", &mut s.chat_volume),
+                        ("Music", &mut s.music_volume),
+                        ("Mic", &mut s.mic_volume),
+                    ] {
+                        if let Some(v) = pct(c) {
+                            *slot = v;
+                        }
+                    }
+                }
+                tokio::time::sleep(wait).await;
+            }
+        });
+    }
 
     #[cfg(unix)]
     let mut sigterm =
@@ -198,36 +232,6 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
 
-            // 2. GoXLR poll: fast while the GUI's Mixer page reads volumes, slow otherwise.
-            //    Its replies are also how the tick knows the Utility is up.
-            _ = tokio::time::sleep_until(next_fader_poll) => {
-                let read_at = shared_state.lock().await.volumes_read_at;
-                next_fader_poll = tokio::time::Instant::now()
-                    + fader_poll_interval(read_at, std::time::Instant::now());
-                if let Ok(vols) = goxlr.get_all_volumes().await {
-                    utility_last_ok = Some(std::time::Instant::now());
-                    let mut s = shared_state.lock().await;
-                    if let Some(&v) = vols.get("Headphones") {
-                        s.speaker_volume = (v as f64 / 255.0) * 100.0;
-                    }
-                    if let Some(&v) = vols.get("System") {
-                        s.system_volume = (v as f64 / 255.0) * 100.0;
-                    }
-                    if let Some(&v) = vols.get("Game") {
-                        s.game_volume = (v as f64 / 255.0) * 100.0;
-                    }
-                    if let Some(&v) = vols.get("Chat") {
-                        s.chat_volume = (v as f64 / 255.0) * 100.0;
-                    }
-                    if let Some(&v) = vols.get("Music") {
-                        s.music_volume = (v as f64 / 255.0) * 100.0;
-                    }
-                    if let Some(&v) = vols.get("Mic") {
-                        s.mic_volume = (v as f64 / 255.0) * 100.0;
-                    }
-                }
-            }
-
             // 3. Periodic topology & routing maintenance tick
             _ = ticker.tick() => {
                 let current_cfg = config_shared.lock().await.clone();
@@ -260,7 +264,8 @@ async fn main() -> anyhow::Result<()> {
                 }
                 let device_up = goxlr_presence.update(device_seen);
                 // Utility features (mixer control, rules, the GUI's online badge) need its replies.
-                let utility_ok = replied_recently(utility_last_ok, std::time::Instant::now());
+                let last_reply = shared_state.lock().await.utility_last_ok;
+                let utility_ok = replied_recently(last_reply, std::time::Instant::now());
                 if device_up && utility_ok != utility_was_ok {
                     if utility_ok {
                         info!("GoXLR Utility answering");
