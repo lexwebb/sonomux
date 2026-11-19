@@ -17,6 +17,8 @@ pub struct SharedDaemonState {
     /// Last time a client (the GUI's Mixer page) read channel volumes: while recent, the
     /// daemon polls the GoXLR fast so the strips follow the hardware.
     pub volumes_read_at: Option<std::time::Instant>,
+    /// Last successful GoXLR Utility reply (from the GoXLR poll task).
+    pub utility_last_ok: Option<std::time::Instant>,
 }
 
 #[derive(Clone)]
