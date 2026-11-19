@@ -120,6 +120,7 @@ async fn main() -> anyhow::Result<()> {
     let mut goxlr_presence = Presence::default();
     // Last successful GoXLR Utility reply. The fader poll is the only thing that asks for it.
     let mut utility_last_ok: Option<std::time::Instant> = None;
+    #[cfg(target_os = "macos")]
     let mut aggregates_checked: Option<std::time::Instant> = None;
     let mut current_loopback_id: Option<u32> = None;
     let (startup_rules, changed_rules) = effective_rules(&config.rules);
