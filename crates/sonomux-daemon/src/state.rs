@@ -105,9 +105,28 @@ impl Presence {
     }
 }
 
+/// How long a GoXLR Utility reply proves it is up. The fader poll asks for status 10 times a
+/// second and its replies take 0.1-0.8 s (more when busy), so a separate probe on every tick
+/// only doubles the load and times out behind it.
+pub const UTILITY_FRESH: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Did the Utility answer recently enough at `now` to count as up without asking again?
+pub fn replied_recently(last_ok: Option<std::time::Instant>, now: std::time::Instant) -> bool {
+    last_ok.is_some_and(|t| now.saturating_duration_since(t) < UTILITY_FRESH)
+}
+
 #[cfg(test)]
 mod presence_tests {
-    use super::Presence;
+    use super::{replied_recently, Presence, UTILITY_FRESH};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn utility_reply_is_fresh_for_a_while() {
+        let t = Instant::now();
+        assert!(!replied_recently(None, t));
+        assert!(replied_recently(Some(t), t + Duration::from_secs(4)));
+        assert!(!replied_recently(Some(t), t + UTILITY_FRESH));
+    }
 
     #[test]
     fn starts_absent_and_comes_up_at_once() {

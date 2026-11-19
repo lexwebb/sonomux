@@ -4,7 +4,7 @@ use sonomux_core::traits::{AudioDevice, DeviceEvent, DeviceStatus};
 use sonomux_core::AppConfig;
 use sonomux_daemon::dbus_service::{SharedDaemonState, SonomuxDbusService};
 use sonomux_daemon::executor::ActionExecutor;
-use sonomux_daemon::state::{Presence, StateStore};
+use sonomux_daemon::state::{replied_recently, Presence, StateStore};
 use sonomux_device_goxlr::GoXLRClient;
 use sonomux_device_headset::HeadsetMonitor;
 use std::sync::Arc;
@@ -117,6 +117,8 @@ async fn main() -> anyhow::Result<()> {
 
     let mut goxlr_was_up = false;
     let mut goxlr_presence = Presence::default();
+    // Last successful GoXLR Utility reply (the fader poll's, or the tick's own probe).
+    let mut utility_last_ok: Option<std::time::Instant> = None;
     let mut current_loopback_id: Option<u32> = None;
     let (startup_rules, changed_rules) = effective_rules(&config.rules);
     log_trimmed_rules(&changed_rules);
@@ -192,6 +194,7 @@ async fn main() -> anyhow::Result<()> {
             // 2. Fast GoXLR hardware fader polling (100ms) for responsive GUI sync
             _ = fader_ticker.tick() => {
                 if let Ok(vols) = goxlr.get_all_volumes().await {
+                    utility_last_ok = Some(std::time::Instant::now());
                     let mut s = shared_state.lock().await;
                     if let Some(&v) = vols.get("Headphones") {
                         s.speaker_volume = (v as f64 / 255.0) * 100.0;
@@ -237,7 +240,15 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
 
-                let utility_ok = goxlr.status().await == DeviceStatus::Active;
+                // The fader poll already asks the Utility 10x a second: reuse its answer, and only
+                // probe here when it has gone quiet.
+                let utility_ok = replied_recently(utility_last_ok, std::time::Instant::now()) || {
+                    let ok = goxlr.status().await == DeviceStatus::Active;
+                    if ok {
+                        utility_last_ok = Some(std::time::Instant::now());
+                    }
+                    ok
+                };
                 let device_ok = utility_ok
                     && Backend::source_exists(&current_cfg.devices.goxlr_mix_source).await;
                 if !device_ok {
