@@ -9,7 +9,7 @@ COVERAGE_DIR="target/coverage"
 # Ratchet: raise these whenever coverage rises; never lower them. Each OS also measures its
 # own platform code (CoreAudio on macOS, the tray's Linux code on Linux), so each has a floor.
 if [[ "$(uname -s)" == "Darwin" ]]; then
-  TARGET_BOUNDARY="63.0"
+  TARGET_BOUNDARY="64.0"
 else
   TARGET_BOUNDARY="67.0"
 fi
