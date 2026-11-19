@@ -4,7 +4,7 @@ use sonomux_core::traits::{AudioDevice, DeviceEvent, DeviceStatus};
 use sonomux_core::AppConfig;
 use sonomux_daemon::dbus_service::{SharedDaemonState, SonomuxDbusService};
 use sonomux_daemon::executor::ActionExecutor;
-use sonomux_daemon::state::StateStore;
+use sonomux_daemon::state::{Presence, StateStore};
 use sonomux_device_goxlr::GoXLRClient;
 use sonomux_device_headset::HeadsetMonitor;
 use std::sync::Arc;
@@ -116,6 +116,7 @@ async fn main() -> anyhow::Result<()> {
     let mut headset_events = headset.subscribe_events().await;
 
     let mut goxlr_was_up = false;
+    let mut goxlr_presence = Presence::default();
     let mut current_loopback_id: Option<u32> = None;
     let (startup_rules, changed_rules) = effective_rules(&config.rules);
     log_trimmed_rules(&changed_rules);
@@ -236,8 +237,24 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
 
-                let goxlr_up = goxlr.status().await == DeviceStatus::Active
+                let utility_ok = goxlr.status().await == DeviceStatus::Active;
+                let device_ok = utility_ok
                     && Backend::source_exists(&current_cfg.devices.goxlr_mix_source).await;
+                if !device_ok {
+                    // Say which check failed: the Utility's reply, or the CoreAudio device.
+                    let failed = if utility_ok {
+                        "audio device missing"
+                    } else {
+                        "GoXLR Utility status failed"
+                    };
+                    if goxlr_was_up {
+                        let n = goxlr_presence.misses() + 1;
+                        info!("GoXLR check failed ({}), {} of {} in a row", failed, n, Presence::MISSES);
+                    } else {
+                        debug!("GoXLR check failed ({})", failed);
+                    }
+                }
+                let goxlr_up = goxlr_presence.update(device_ok);
 
                 {
                     let mut s = shared_state.lock().await;
