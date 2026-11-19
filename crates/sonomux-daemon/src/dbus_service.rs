@@ -14,6 +14,9 @@ pub struct SharedDaemonState {
     pub music_volume: f64,
     pub mic_volume: f64,
     pub loopback_active: bool,
+    /// Last time a client (the GUI's Mixer page) read channel volumes: while recent, the
+    /// daemon polls the GoXLR fast so the strips follow the hardware.
+    pub volumes_read_at: Option<std::time::Instant>,
 }
 
 #[derive(Clone)]
@@ -46,7 +49,8 @@ impl SonomuxDbusService {
 
     /// Get all GoXLR channel volumes in percentages (0.0 to 100.0).
     async fn get_channel_volumes(&self) -> std::collections::HashMap<String, f64> {
-        let s = self.state.lock().await;
+        let mut s = self.state.lock().await;
+        s.volumes_read_at = Some(std::time::Instant::now());
         let mut map = std::collections::HashMap::new();
         map.insert("System".into(), s.system_volume);
         map.insert("Game".into(), s.game_volume);

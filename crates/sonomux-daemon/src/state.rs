@@ -105,9 +105,60 @@ impl Presence {
     }
 }
 
+/// GoXLR poll interval with no one watching the faders. The tray and status bar refresh once a
+/// second and only show the speaker level, so this only bounds how stale that is.
+pub const FADER_POLL_IDLE: std::time::Duration = std::time::Duration::from_secs(5);
+/// GoXLR poll interval while the GUI's Mixer page is open, so strips follow the hardware.
+pub const FADER_POLL_LIVE: std::time::Duration = std::time::Duration::from_millis(100);
+/// The Mixer page counts as open while it read volumes this recently (it reads every 100 ms).
+pub const VOLUMES_WATCHED: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// How long one GoXLR Utility reply proves it is up: three idle polls. Its replies take
+/// 0.1-0.8 s and longer when busy, so a single missed or late reply is not a disconnect.
+pub const UTILITY_FRESH: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Interval until the next GoXLR poll, given when a client last read volumes.
+pub fn fader_poll_interval(
+    volumes_read_at: Option<std::time::Instant>,
+    now: std::time::Instant,
+) -> std::time::Duration {
+    match volumes_read_at {
+        Some(t) if now.saturating_duration_since(t) < VOLUMES_WATCHED => FADER_POLL_LIVE,
+        _ => FADER_POLL_IDLE,
+    }
+}
+
+/// Did the Utility answer recently enough at `now` to count as up without asking again?
+pub fn replied_recently(last_ok: Option<std::time::Instant>, now: std::time::Instant) -> bool {
+    last_ok.is_some_and(|t| now.saturating_duration_since(t) < UTILITY_FRESH)
+}
+
 #[cfg(test)]
 mod presence_tests {
-    use super::Presence;
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn utility_reply_is_fresh_for_three_idle_polls() {
+        let t = Instant::now();
+        assert!(!replied_recently(None, t));
+        assert!(replied_recently(Some(t), t + FADER_POLL_IDLE * 2));
+        assert!(!replied_recently(Some(t), t + FADER_POLL_IDLE * 3));
+    }
+
+    #[test]
+    fn polls_fast_only_while_volumes_are_read() {
+        let t = Instant::now();
+        assert_eq!(fader_poll_interval(None, t), FADER_POLL_IDLE);
+        assert_eq!(
+            fader_poll_interval(Some(t), t + Duration::from_millis(500)),
+            FADER_POLL_LIVE
+        );
+        assert_eq!(
+            fader_poll_interval(Some(t), t + VOLUMES_WATCHED),
+            FADER_POLL_IDLE
+        );
+    }
 
     #[test]
     fn starts_absent_and_comes_up_at_once() {

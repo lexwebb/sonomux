@@ -4,7 +4,7 @@ use sonomux_core::traits::{AudioDevice, DeviceEvent, DeviceStatus};
 use sonomux_core::AppConfig;
 use sonomux_daemon::dbus_service::{SharedDaemonState, SonomuxDbusService};
 use sonomux_daemon::executor::ActionExecutor;
-use sonomux_daemon::state::{Presence, StateStore};
+use sonomux_daemon::state::{fader_poll_interval, replied_recently, Presence, StateStore};
 use sonomux_device_goxlr::GoXLRClient;
 use sonomux_device_headset::HeadsetMonitor;
 use std::sync::Arc;
@@ -50,6 +50,7 @@ async fn main() -> anyhow::Result<()> {
         music_volume: 70.0,
         mic_volume: 100.0,
         loopback_active: false,
+        volumes_read_at: None,
     }));
 
     let config_shared = Arc::new(Mutex::new(config.clone()));
@@ -117,6 +118,10 @@ async fn main() -> anyhow::Result<()> {
 
     let mut goxlr_was_up = false;
     let mut goxlr_presence = Presence::default();
+    // Last successful GoXLR Utility reply. The fader poll is the only thing that asks for it.
+    let mut utility_last_ok: Option<std::time::Instant> = None;
+    #[cfg(target_os = "macos")]
+    let mut aggregates_checked: Option<std::time::Instant> = None;
     let mut current_loopback_id: Option<u32> = None;
     let (startup_rules, changed_rules) = effective_rules(&config.rules);
     log_trimmed_rules(&changed_rules);
@@ -134,9 +139,8 @@ async fn main() -> anyhow::Result<()> {
             .check_interval_ms
             .max(sonomux_core::config::MIN_CHECK_INTERVAL_MS),
     ));
-    let mut fader_ticker = tokio::time::interval(Duration::from_millis(100));
-    // After a slow reply (GoXLR Utility busy or timing out), don't fire the missed polls back to back.
-    fader_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // Next GoXLR poll. Spaced from the end of the last one, so a slow reply never stacks polls.
+    let mut next_fader_poll = tokio::time::Instant::now();
 
     #[cfg(unix)]
     let mut sigterm =
@@ -189,9 +193,14 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
 
-            // 2. Fast GoXLR hardware fader polling (100ms) for responsive GUI sync
-            _ = fader_ticker.tick() => {
+            // 2. GoXLR poll: fast while the GUI's Mixer page reads volumes, slow otherwise.
+            //    Its replies are also how the tick knows the Utility is up.
+            _ = tokio::time::sleep_until(next_fader_poll) => {
+                let read_at = shared_state.lock().await.volumes_read_at;
+                next_fader_poll = tokio::time::Instant::now()
+                    + fader_poll_interval(read_at, std::time::Instant::now());
                 if let Ok(vols) = goxlr.get_all_volumes().await {
+                    utility_last_ok = Some(std::time::Instant::now());
                     let mut s = shared_state.lock().await;
                     if let Some(&v) = vols.get("Headphones") {
                         s.speaker_volume = (v as f64 / 255.0) * 100.0;
@@ -237,7 +246,8 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
 
-                let utility_ok = goxlr.status().await == DeviceStatus::Active;
+                // The GoXLR poll's replies say whether the Utility is up; no extra request here.
+                let utility_ok = replied_recently(utility_last_ok, std::time::Instant::now());
                 let device_ok = utility_ok
                     && Backend::source_exists(&current_cfg.devices.goxlr_mix_source).await;
                 if !device_ok {
@@ -245,7 +255,7 @@ async fn main() -> anyhow::Result<()> {
                     let failed = if utility_ok {
                         "audio device missing"
                     } else {
-                        "GoXLR Utility status failed"
+                        "no GoXLR Utility reply recently"
                     };
                     if goxlr_was_up {
                         let n = goxlr_presence.misses() + 1;
@@ -263,11 +273,15 @@ async fn main() -> anyhow::Result<()> {
 
                 if goxlr_up {
                     // Sonomux makes the GoXLR channel devices on macOS; keep the Utility's off.
+                    // That check is a full status request, so only on connect and once a minute.
                     #[cfg(target_os = "macos")]
-                    match goxlr.disable_macos_aggregates().await {
-                        Ok(true) => info!("Turned off GoXLR Utility's macOS aggregate devices"),
-                        Ok(false) => {}
-                        Err(e) => debug!("GoXLR aggregate setting check failed: {}", e),
+                    if !goxlr_was_up || aggregates_checked.is_none_or(|t| t.elapsed() >= Duration::from_secs(60)) {
+                        aggregates_checked = Some(std::time::Instant::now());
+                        match goxlr.disable_macos_aggregates().await {
+                            Ok(true) => info!("Turned off GoXLR Utility's macOS aggregate devices"),
+                            Ok(false) => {}
+                            Err(e) => debug!("GoXLR aggregate setting check failed: {}", e),
+                        }
                     }
                     if !goxlr_was_up {
                         // The sampler mix only feeds the headset loopback, which macOS lacks so far.
@@ -426,10 +440,15 @@ async fn evaluate_and_dispatch(
     }
 
     let headset_status = headset.status().await;
-    let goxlr_status = goxlr.status().await;
-    let battery = {
+    // The main loop's debounced presence: probing the Utility again here would only add load.
+    let (goxlr_status, battery) = {
         let s = shared_state.lock().await;
-        s.battery_pct
+        let up = if s.goxlr_active {
+            DeviceStatus::Active
+        } else {
+            DeviceStatus::Disconnected
+        };
+        (up, s.battery_pct)
     };
 
     let headset_sink_present = Backend::sink_exists(&config.devices.headset_sink).await;

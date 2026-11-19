@@ -146,6 +146,9 @@ export component MainWindow inherits Window {
     background: Palette.background;
 
     in-out property <int> page: 0;
+    // The daemon polls the GoXLR fast only while the Mixer page (0) reads volumes.
+    callback page-changed(int);
+    changed page => { root.page-changed(self.page); }
 
     // Status
     in property <bool> daemon-online;
