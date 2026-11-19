@@ -33,7 +33,9 @@ async fn main() -> anyhow::Result<()> {
     info!("Configuration loaded from: {}", config_path.display());
 
     let state_store = StateStore::new();
-    let goxlr = GoXLRClient::new(&config.devices.goxlr_socket);
+    // The Utility can take 3-4 s to answer when busy (seen after a wake); a 2 s timeout abandoned
+    // most replies. 4 s still fits inside the 5 s idle poll.
+    let goxlr = GoXLRClient::new(&config.devices.goxlr_socket).with_timeout(Duration::from_secs(4));
     let headset = HeadsetMonitor::new(&config.devices.headset_name, config.devices.debounce_count);
 
     // Initial volume readout
@@ -117,6 +119,9 @@ async fn main() -> anyhow::Result<()> {
     let mut headset_events = headset.subscribe_events().await;
 
     let mut goxlr_was_up = false;
+    // The GoXLR's CoreAudio/Pulse device (routes) and its Utility (mixer control) are tracked apart.
+    let mut device_was_up = false;
+    let mut utility_was_ok = false;
     let mut goxlr_presence = Presence::default();
     // Last successful GoXLR Utility reply. The fader poll is the only thing that asks for it.
     let mut utility_last_ok: Option<std::time::Instant> = None;
@@ -246,30 +251,53 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
 
-                // The GoXLR poll's replies say whether the Utility is up; no extra request here.
+                // Routes only need the GoXLR's audio device; a slow or busy GoXLR Utility must not
+                // tear them down (that drops apps onto the System fader and volumes jump).
+                let device_seen = Backend::source_exists(&current_cfg.devices.goxlr_mix_source).await;
+                if !device_seen && device_was_up {
+                    let n = goxlr_presence.misses() + 1;
+                    info!("GoXLR audio device missing, {} of {} in a row", n, Presence::MISSES);
+                }
+                let device_up = goxlr_presence.update(device_seen);
+                // Utility features (mixer control, rules, the GUI's online badge) need its replies.
                 let utility_ok = replied_recently(utility_last_ok, std::time::Instant::now());
-                let device_ok = utility_ok
-                    && Backend::source_exists(&current_cfg.devices.goxlr_mix_source).await;
-                if !device_ok {
-                    // Say which check failed: the Utility's reply, or the CoreAudio device.
-                    let failed = if utility_ok {
-                        "audio device missing"
+                if device_up && utility_ok != utility_was_ok {
+                    if utility_ok {
+                        info!("GoXLR Utility answering");
                     } else {
-                        "no GoXLR Utility reply recently"
-                    };
-                    if goxlr_was_up {
-                        let n = goxlr_presence.misses() + 1;
-                        info!("GoXLR check failed ({}), {} of {} in a row", failed, n, Presence::MISSES);
-                    } else {
-                        debug!("GoXLR check failed ({})", failed);
+                        warn!("GoXLR Utility not answering; keeping audio routes, pausing mixer features");
                     }
                 }
-                let goxlr_up = goxlr_presence.update(device_ok);
+                utility_was_ok = utility_ok;
+                let goxlr_up = device_up && utility_ok;
 
                 {
                     let mut s = shared_state.lock().await;
                     s.goxlr_active = goxlr_up;
                 }
+
+                if device_up {
+                    // Enforce Virtual Surround Manager pinning
+                    let keep_off: Vec<&str> = current_cfg.policies.keep_off_surround.iter().map(|s| s.as_str()).collect();
+                    if let Err(e) = Backend::enforce_surround_policies(
+                        &current_cfg.policies.surround_out_node,
+                        &current_cfg.policies.surround_in_node,
+                        &current_cfg.devices.goxlr_game_sink,
+                        &current_cfg.devices.goxlr_system_sink,
+                        &keep_off,
+                    ).await {
+                        debug!("Surround policy enforcement: {}", e);
+                    }
+
+                    // Enforce intelligent stream classification & routing policies
+                    routing_pass(&current_cfg, true).await;
+                } else {
+                    if device_was_up {
+                        warn!("GoXLR disconnected or suspended.");
+                    }
+                    routing_pass(&current_cfg, false).await;
+                }
+                device_was_up = device_up;
 
                 if goxlr_up {
                     // Sonomux makes the GoXLR channel devices on macOS; keep the Utility's off.
@@ -292,23 +320,7 @@ async fn main() -> anyhow::Result<()> {
                                 tracing::error!("Failed to configure GoXLR routing: {}", e);
                             }
                         }
-                        goxlr_was_up = true;
                     }
-
-                    // Enforce Virtual Surround Manager pinning
-                    let keep_off: Vec<&str> = current_cfg.policies.keep_off_surround.iter().map(|s| s.as_str()).collect();
-                    if let Err(e) = Backend::enforce_surround_policies(
-                        &current_cfg.policies.surround_out_node,
-                        &current_cfg.policies.surround_in_node,
-                        &current_cfg.devices.goxlr_game_sink,
-                        &current_cfg.devices.goxlr_system_sink,
-                        &keep_off,
-                    ).await {
-                        debug!("Surround policy enforcement: {}", e);
-                    }
-
-                    // Enforce intelligent stream classification & routing policies
-                    routing_pass(&current_cfg, true).await;
 
                     // Evaluate rules on maintenance tick
                     evaluate_and_dispatch(
@@ -320,19 +332,14 @@ async fn main() -> anyhow::Result<()> {
                         &mut rule_engine,
                         &mut current_loopback_id,
                     ).await;
-                } else {
-                    if goxlr_was_up {
-                        warn!("GoXLR disconnected or suspended.");
-                    }
-                    goxlr_was_up = false;
-                    routing_pass(&current_cfg, false).await;
                 }
+                goxlr_was_up = goxlr_up;
             }
 
             // 2b. Routing requested over IPC (override, category, toggle): run it now with the latest config
             _ = routing_kick.notified() => {
                 let cfg = config_shared.lock().await.clone();
-                routing_pass(&cfg, goxlr_was_up).await;
+                routing_pass(&cfg, device_was_up).await;
             }
 
             // 3. Graceful shutdown on Ctrl+C or SIGTERM
